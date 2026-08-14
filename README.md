@@ -197,6 +197,42 @@ make destroy
 
 Destroys all AWS resources. S3 buckets must be empty first — empty them manually or add a `force_destroy = true` argument to both bucket resources in `terraform/s3.tf` before running destroy.
 
+## Rate limiting
+
+API Gateway throttling is applied at two levels:
+
+| Scope | Limit | Why |
+|---|---|---|
+| All methods (combined) | 10 req/s, burst 20 | Hard cap on total API traffic — returns HTTP 429 when exceeded |
+| `POST /upload-url` only | 2 req/s, burst 5 | Tighter limit since each call triggers a Bedrock inference job |
+
+This is stage-level (aggregate across all callers). If you need per-IP isolation — so one bad actor can't consume the whole budget — add WAF with a rate-based rule (~$6/month):
+
+```hcl
+# terraform/waf.tf
+resource "aws_wafv2_web_acl" "api" {
+  name  = "${var.project_name}-waf"
+  scope = "REGIONAL"
+  ...
+  rule {
+    name     = "rate-limit-per-ip"
+    priority = 1
+    action { block {} }
+    statement {
+      rate_based_statement {
+        limit              = 100   # requests per 5-minute window per IP
+        aggregate_key_type = "IP"
+      }
+    }
+  }
+}
+
+resource "aws_wafv2_web_acl_association" "api" {
+  resource_arn = aws_api_gateway_stage.main.arn
+  web_acl_arn  = aws_wafv2_web_acl.api.arn
+}
+```
+
 ## Known limitations
 
 | Limitation | Detail |

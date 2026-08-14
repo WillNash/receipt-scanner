@@ -204,3 +204,31 @@ resource "aws_api_gateway_stage" "main" {
     Environment = var.environment
   }
 }
+
+## Rate limiting via method settings
+## aws_api_gateway_method_settings is the correct throttling mechanism for REST API (v1).
+## Usage Plans / API keys are not used — this is a public SPA with Cognito auth.
+
+# Default throttle applied to every method on the stage
+resource "aws_api_gateway_method_settings" "default" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  stage_name  = aws_api_gateway_stage.main.stage_name
+  method_path = "*/*"
+
+  settings {
+    throttling_rate_limit  = 10  # steady-state req/s across all callers combined
+    throttling_burst_limit = 20  # token-bucket burst allowance
+  }
+}
+
+# Tighter limit on POST /upload-url — each call triggers a Bedrock inference job
+resource "aws_api_gateway_method_settings" "upload_url_post" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  stage_name  = aws_api_gateway_stage.main.stage_name
+  method_path = "upload-url/POST"
+
+  settings {
+    throttling_rate_limit  = 2  # max 2 new image analyses per second
+    throttling_burst_limit = 5  # short burst allowance
+  }
+}
