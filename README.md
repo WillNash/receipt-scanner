@@ -129,15 +129,24 @@ Checks that CloudFront returns HTTP 200 and the API returns HTTP 401 (no auth �
 
 ## Usage
 
-1. Open the CloudFront URL in a browser
-2. You are redirected to the Cognito hosted UI — register an account or sign in
-3. After login you are redirected back to the app
-4. Drop or select an image (JPEG, PNG, GIF, or WebP; max 3.75 MB)
-5. Click **Analyse**
-6. Watch the status update every 3 seconds: `PENDING → PROCESSING → COMPLETE`
-7. The result displays the emotion label, confidence score, and the model's reasoning
+The web application is part of this project — it is built from the files in `frontend/` and deployed to S3/CloudFront as part of `make deploy`. No separate download or installation is required.
 
-To share the demo with others, send them the CloudFront URL. Each user registers their own Cognito account and can only see their own results.
+When deployment completes, a URL is printed:
+
+```
+Done! App live at: https://d1234abcd.cloudfront.net/
+```
+
+Open that URL in any browser to use the app:
+
+1. You are redirected to the Cognito hosted UI — register an account or sign in
+2. After login you are redirected back to the upload page
+3. Drop or select an image (JPEG, PNG, GIF, or WebP; max 3.75 MB)
+4. Click **Analyse**
+5. Watch the status update every 3 seconds: `PENDING → PROCESSING → COMPLETE`
+6. The result displays the emotion label, confidence score, and the model's reasoning
+
+To share the demo with others, send them the CloudFront URL. Each person registers their own Cognito account and can only see their own results.
 
 ## Project structure
 
