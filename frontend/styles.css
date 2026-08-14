@@ -1,0 +1,182 @@
+:root {
+  --happy:   #2e7d32;
+  --happy-bg: #e8f5e9;
+  --sad:     #1565c0;
+  --sad-bg:  #e3f2fd;
+  --neutral: #555;
+  --border:  #ddd;
+  --surface: #fff;
+  --bg:      #f5f5f5;
+  --radius:  12px;
+  --shadow:  0 2px 12px rgba(0,0,0,0.08);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: #222;
+  min-height: 100vh;
+}
+
+#app {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2rem;
+}
+
+header h1 {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #111;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 1.2rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: opacity 0.15s, background 0.15s;
+  text-decoration: none;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary  { background: #1a73e8; color: #fff; }
+.btn-primary:hover  { background: #1558b0; }
+.btn-secondary { background: #e8eaed; color: #222; }
+.btn-secondary:hover { background: #d2d5db; }
+
+/* Drop zone */
+.drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 3rem 2rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+.drop-zone:hover,
+.drop-zone.drag-over { border-color: #1a73e8; background: #f0f6ff; }
+.drop-zone:focus-visible { outline: 3px solid #1a73e8; }
+
+.upload-icon {
+  width: 48px; height: 48px;
+  color: #9aa0a6;
+  margin-bottom: 1rem;
+}
+.drop-hint { font-size: 1rem; color: #444; margin-bottom: 0.25rem; }
+.drop-sub  { font-size: 0.85rem; color: #888; margin-bottom: 0.75rem; }
+
+.file-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+#file-name { flex: 1; font-size: 0.9rem; color: #444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.error-text { color: #c62828; font-size: 0.88rem; margin-top: 0.5rem; }
+
+/* Status card */
+.status-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  padding: 2.5rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.spinner {
+  width: 40px; height: 40px;
+  border: 3px solid var(--border);
+  border-top-color: #1a73e8;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.status-text { font-size: 1rem; color: var(--neutral); }
+
+/* Result card */
+.result-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 2rem;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.emotion-badge {
+  font-size: 1.6rem;
+  font-weight: 700;
+  padding: 0.6rem 2.2rem;
+  border-radius: 999px;
+  letter-spacing: 0.03em;
+  text-transform: capitalize;
+}
+.emotion-badge.happy { background: var(--happy-bg); color: var(--happy); }
+.emotion-badge.sad   { background: var(--sad-bg);   color: var(--sad); }
+
+.confidence-wrap {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.confidence-label { font-size: 0.85rem; color: #666; white-space: nowrap; }
+.confidence-bar-track {
+  flex: 1;
+  height: 10px;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.confidence-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: #1a73e8;
+  width: 0%;
+  transition: width 0.6s ease;
+}
+.confidence-pct { font-size: 0.85rem; color: #444; white-space: nowrap; min-width: 3rem; text-align: right; }
+
+.reasoning-text {
+  font-size: 0.95rem;
+  color: #444;
+  line-height: 1.6;
+  text-align: center;
+  max-width: 560px;
+}
+
+.result-card--failed { border: 1px solid #ffcdd2; }
+.failed-text { color: #c62828; font-size: 0.95rem; }
+
+@media (max-width: 600px) {
+  header { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+  .drop-zone { padding: 2rem 1rem; }
+  .confidence-wrap { flex-wrap: wrap; }
+}

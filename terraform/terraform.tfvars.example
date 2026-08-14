@@ -1,0 +1,5 @@
+project_name          = "bedrock-image-ai"
+aws_account_id        = "123456789012"          # Replace with actual account ID (auto-written by setup)
+cognito_domain_prefix = "bedrock-image-ai-789012" # Must be globally unique across all AWS accounts
+primary_region        = "ap-southeast-2"
+environment           = "demo"

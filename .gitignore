@@ -1,0 +1,23 @@
+# Generated files
+frontend/app.js
+terraform/terraform.tfvars
+
+# Lambda build artifacts
+lambda/*/package/
+lambda/*.zip
+
+# Terraform state and cache
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfplan
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# OS
+.DS_Store

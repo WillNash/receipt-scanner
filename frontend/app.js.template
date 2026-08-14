@@ -1,0 +1,277 @@
+// Config is injected by scripts/inject_config.py from Terraform outputs.
+// Edit app.js.template (source of truth). Do NOT edit app.js directly — it is generated.
+const CONFIG = {
+  apiBaseUrl:      "__API_BASE_URL__",
+  cognitoLoginUrl: "__COGNITO_LOGIN_URL__",
+  cognitoTokenUrl: "__COGNITO_TOKEN_URL__",
+  cognitoClientId: "__COGNITO_CLIENT_ID__",
+  redirectUri:     "__REDIRECT_URI__",
+};
+
+// ── State ─────────────────────────────────────────────────────────────────────
+
+let currentJobId = sessionStorage.getItem("currentJobId") || null;
+let pollTimer = null;
+let pollCount = 0;
+const MAX_POLLS = 60;
+const POLL_INTERVAL_MS = 3000;
+const MAX_FILE_BYTES = 3.75 * 1024 * 1024;
+
+// ── Auth helpers ──────────────────────────────────────────────────────────────
+
+function getToken() {
+  return sessionStorage.getItem("id_token");
+}
+
+function logout() {
+  sessionStorage.clear();
+  const logoutUrl =
+    CONFIG.cognitoLoginUrl.replace("/login?", "/logout?") +
+    `&logout_uri=${encodeURIComponent(CONFIG.redirectUri.replace("/callback", "/"))}`;
+  window.location.href = logoutUrl;
+}
+
+async function exchangeCode(code) {
+  const params = new URLSearchParams({
+    grant_type:   "authorization_code",
+    client_id:    CONFIG.cognitoClientId,
+    code,
+    redirect_uri: CONFIG.redirectUri,
+  });
+  const resp = await fetch(CONFIG.cognitoTokenUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
+  });
+  if (!resp.ok) throw new Error(`Token exchange failed: ${resp.status}`);
+  const data = await resp.json();
+  sessionStorage.setItem("id_token", data.id_token);
+  sessionStorage.setItem("access_token", data.access_token);
+  // Remove ?code= from URL without triggering a reload
+  history.replaceState({}, document.title, window.location.pathname);
+}
+
+// ── Initialisation ────────────────────────────────────────────────────────────
+
+async function init() {
+  const token = getToken();
+  const urlParams = new URLSearchParams(window.location.search);
+  const code = urlParams.get("code");
+
+  if (token) {
+    showApp();
+    return;
+  }
+
+  if (code) {
+    try {
+      await exchangeCode(code);
+      showApp();
+    } catch (err) {
+      console.error("Token exchange error:", err);
+      window.location.href = CONFIG.cognitoLoginUrl;
+    }
+    return;
+  }
+
+  window.location.href = CONFIG.cognitoLoginUrl;
+}
+
+function showApp() {
+  document.getElementById("logout-btn").style.display = "";
+  showSection("upload-section");
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+
+function showSection(id) {
+  ["upload-section", "status-section", "result-section", "failed-section"]
+    .forEach(s => {
+      const el = document.getElementById(s);
+      if (el) el.style.display = s === id ? "" : "none";
+    });
+}
+
+function setStatus(text) {
+  document.getElementById("status-text").textContent = text;
+}
+
+function showError(msg) {
+  const el = document.getElementById("upload-error");
+  el.textContent = msg;
+  el.style.display = "";
+}
+
+function clearError() {
+  const el = document.getElementById("upload-error");
+  el.textContent = "";
+  el.style.display = "none";
+}
+
+function renderResult(job) {
+  const label = (job.label || "").toLowerCase();
+  const badge = document.getElementById("emotion-badge");
+  badge.textContent = label === "happy" ? "Happy 😊" : "Sad 😢";
+  badge.className = `emotion-badge ${label}`;
+
+  const pct = Math.round((job.confidence || 0) * 100);
+  document.getElementById("confidence-bar").style.width = `${pct}%`;
+  document.getElementById("confidence-pct").textContent = `${pct}%`;
+  document.getElementById("reasoning-text").textContent = job.reasoning || "";
+
+  showSection("result-section");
+}
+
+// ── Upload flow ───────────────────────────────────────────────────────────────
+
+function validateFile(file) {
+  if (!file.type.startsWith("image/")) {
+    return "Please select an image file.";
+  }
+  if (file.size > MAX_FILE_BYTES) {
+    return "File must be smaller than 3.75 MB.";
+  }
+  return null;
+}
+
+async function handleUpload(file) {
+  clearError();
+  const err = validateFile(file);
+  if (err) { showError(err); return; }
+
+  showSection("status-section");
+  setStatus("Requesting upload URL…");
+
+  try {
+    // Step 1 — get presigned URL
+    const urlResp = await fetch(`${CONFIG.apiBaseUrl}/upload-url`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${getToken()}`,
+      },
+      body: JSON.stringify({ contentType: file.type }),
+    });
+    if (!urlResp.ok) {
+      const body = await urlResp.json().catch(() => ({}));
+      throw new Error(body.error || `HTTP ${urlResp.status}`);
+    }
+    const { jobId, uploadUrl } = await urlResp.json();
+
+    // Step 2 — PUT directly to S3 via presigned URL
+    setStatus("Uploading image…");
+    const putResp = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": file.type },
+      body: file,
+    });
+    if (!putResp.ok) throw new Error(`S3 upload failed: ${putResp.status}`);
+
+    // Step 3 — start polling
+    currentJobId = jobId;
+    sessionStorage.setItem("currentJobId", jobId);
+    setStatus("Analysing image…");
+    startPolling(jobId);
+
+  } catch (err) {
+    console.error("Upload error:", err);
+    showSection("upload-section");
+    showError(`Upload failed: ${err.message}`);
+  }
+}
+
+// ── Polling ───────────────────────────────────────────────────────────────────
+
+function startPolling(jobId) {
+  pollCount = 0;
+  clearTimeout(pollTimer);
+  poll(jobId);
+}
+
+async function poll(jobId) {
+  if (pollCount >= MAX_POLLS) {
+    showSection("failed-section");
+    return;
+  }
+  pollCount++;
+
+  try {
+    const resp = await fetch(`${CONFIG.apiBaseUrl}/jobs/${jobId}`, {
+      headers: { "Authorization": `Bearer ${getToken()}` },
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const job = await resp.json();
+
+    switch (job.status) {
+      case "COMPLETE":
+        sessionStorage.removeItem("currentJobId");
+        renderResult(job);
+        break;
+      case "FAILED":
+        sessionStorage.removeItem("currentJobId");
+        showSection("failed-section");
+        break;
+      default:
+        // PENDING or PROCESSING — keep polling
+        pollTimer = setTimeout(() => poll(jobId), POLL_INTERVAL_MS);
+    }
+  } catch (err) {
+    console.error("Poll error:", err);
+    pollTimer = setTimeout(() => poll(jobId), POLL_INTERVAL_MS);
+  }
+}
+
+// ── Event listeners ───────────────────────────────────────────────────────────
+
+document.addEventListener("DOMContentLoaded", () => {
+  init();
+
+  const dropZone = document.getElementById("drop-zone");
+  const fileInput = document.getElementById("file-input");
+  const fileInfo  = document.getElementById("file-info");
+  const fileName  = document.getElementById("file-name");
+  let selectedFile = null;
+
+  function selectFile(file) {
+    selectedFile = file;
+    fileName.textContent = file.name;
+    fileInfo.style.display = "";
+    clearError();
+  }
+
+  dropZone.addEventListener("click", () => fileInput.click());
+  dropZone.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") fileInput.click(); });
+
+  dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+  dropZone.addEventListener("dragleave",  () => dropZone.classList.remove("drag-over"));
+  dropZone.addEventListener("drop", e => {
+    e.preventDefault();
+    dropZone.classList.remove("drag-over");
+    const file = e.dataTransfer.files[0];
+    if (file) selectFile(file);
+  });
+
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files[0]) selectFile(fileInput.files[0]);
+  });
+
+  document.getElementById("analyse-btn").addEventListener("click", () => {
+    if (selectedFile) handleUpload(selectedFile);
+  });
+
+  document.getElementById("logout-btn").addEventListener("click", logout);
+
+  document.getElementById("upload-another-btn").addEventListener("click", () => {
+    selectedFile = null;
+    fileInput.value = "";
+    fileInfo.style.display = "none";
+    showSection("upload-section");
+  });
+
+  document.getElementById("retry-btn").addEventListener("click", () => {
+    selectedFile = null;
+    fileInput.value = "";
+    fileInfo.style.display = "none";
+    showSection("upload-section");
+  });
+});

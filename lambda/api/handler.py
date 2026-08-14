@@ -1,0 +1,165 @@
+import json
+import os
+import urllib.request
+import uuid
+from datetime import datetime, timedelta, timezone
+
+import boto3
+
+DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
+UPLOADS_BUCKET = os.environ["UPLOADS_BUCKET"]
+COGNITO_POOL_ID = os.environ["COGNITO_USER_POOL_ID"]
+PRIMARY_REGION = os.environ.get("PRIMARY_REGION", "ap-southeast-2")
+ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
+
+dynamodb = boto3.client("dynamodb", region_name=PRIMARY_REGION)
+s3 = boto3.client("s3", region_name=PRIMARY_REGION)
+
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+    "Access-Control-Allow-Headers": "Content-Type,Authorization",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Content-Type": "application/json",
+}
+
+VALID_CONTENT_TYPES = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/gif": "gif",
+    "image/webp": "webp",
+}
+
+# Module-level JWKS cache — populated once per Lambda container (cold start only).
+# Warm invocations reuse _jwks_cache and skip the Cognito network fetch.
+_jwks_cache = None
+
+
+def get_jwks() -> dict:
+    global _jwks_cache
+    if _jwks_cache is None:
+        jwks_url = (
+            f"https://cognito-idp.{PRIMARY_REGION}.amazonaws.com"
+            f"/{COGNITO_POOL_ID}/.well-known/jwks.json"
+        )
+        with urllib.request.urlopen(jwks_url) as resp:
+            _jwks_cache = json.loads(resp.read())
+    return _jwks_cache
+
+
+def lambda_handler(event, context):
+    method = event.get("httpMethod", "")
+    path = event.get("path", "")
+
+    if method == "OPTIONS":
+        return make_response(200, {})
+
+    try:
+        user_id = get_user_id(event)
+    except Exception as exc:
+        return make_response(401, {"error": f"Unauthorized: {exc}"})
+
+    if method == "POST" and path.endswith("/upload-url"):
+        return handle_upload_url(event, user_id)
+    elif method == "GET" and "/jobs/" in path:
+        job_id = (event.get("pathParameters") or {}).get("jobId")
+        return handle_get_job(job_id, user_id)
+    else:
+        return make_response(404, {"error": "Not found"})
+
+
+def handle_upload_url(event, user_id: str):
+    body = json.loads(event.get("body") or "{}")
+    content_type = body.get("contentType", "image/jpeg")
+
+    if content_type not in VALID_CONTENT_TYPES:
+        return make_response(400, {"error": f"Unsupported content type: {content_type}"})
+
+    ext = VALID_CONTENT_TYPES[content_type]
+    job_id = str(uuid.uuid4())
+    s3_key = f"uploads/{user_id}/{job_id}.{ext}"
+    now = now_iso()
+    expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
+
+    dynamodb.put_item(
+        TableName=DYNAMODB_TABLE,
+        Item={
+            "job_id": {"S": job_id},
+            "user_id": {"S": user_id},
+            "s3_key": {"S": s3_key},
+            "status": {"S": "PENDING"},
+            "created_at": {"S": now},
+            "updated_at": {"S": now},
+            "expires_at": {"N": str(expiry)},
+        },
+    )
+
+    upload_url = s3.generate_presigned_url(
+        "put_object",
+        Params={
+            "Bucket": UPLOADS_BUCKET,
+            "Key": s3_key,
+            "ContentType": content_type,
+        },
+        ExpiresIn=300,
+    )
+    return make_response(200, {"jobId": job_id, "uploadUrl": upload_url, "s3Key": s3_key})
+
+
+def handle_get_job(job_id: str | None, user_id: str):
+    if not job_id:
+        return make_response(400, {"error": "jobId required"})
+
+    result = dynamodb.get_item(
+        TableName=DYNAMODB_TABLE,
+        Key={"job_id": {"S": job_id}},
+    )
+    item = result.get("Item")
+    if not item:
+        return make_response(404, {"error": "Job not found"})
+
+    if item.get("user_id", {}).get("S") != user_id:
+        return make_response(403, {"error": "Forbidden"})
+
+    confidence = item.get("confidence")
+    return make_response(200, {
+        "jobId": item["job_id"]["S"],
+        "status": item.get("status", {}).get("S", "UNKNOWN"),
+        "label": item.get("label", {}).get("S"),
+        "reasoning": item.get("reasoning", {}).get("S"),
+        "confidence": float(confidence["N"]) if confidence else None,
+        "createdAt": item.get("created_at", {}).get("S"),
+        "updatedAt": item.get("updated_at", {}).get("S"),
+    })
+
+
+def get_user_id(event) -> str:
+    """Validate the Cognito JWT in the Authorization header and return the sub claim."""
+    from jose import jwt
+
+    headers = event.get("headers") or {}
+    # HTTP/2 canonicalises headers to lowercase — check both forms
+    auth_header = headers.get("Authorization") or headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise ValueError("Missing Bearer token")
+    token = auth_header[7:]
+
+    jwks = get_jwks()
+    claims = jwt.decode(
+        token,
+        jwks,
+        algorithms=["RS256"],
+        options={"verify_aud": False},
+    )
+    return claims["sub"]
+
+
+def make_response(status_code: int, body: dict) -> dict:
+    return {
+        "statusCode": status_code,
+        "headers": CORS_HEADERS,
+        "body": json.dumps(body),
+    }
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
