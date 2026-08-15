@@ -1,6 +1,6 @@
-# Image Emotion Classifier
+# Receipt Scanner
 
-A demo web application that lets authenticated users upload images and have them classified as **happy** or **sad** using [Meta Llama 3.2 Vision 11B](https://aws.amazon.com/bedrock/) via Amazon Bedrock. Results include a label, confidence score, and reasoning from the model.
+A demo web application that lets authenticated users upload receipt images and have them scanned using [Amazon Textract](https://aws.amazon.com/textract/) (`AnalyzeExpense`). Results include the vendor name, date, total, and a line-item breakdown. Multiple receipts can be uploaded and scanned in parallel.
 
 ## Architecture
 
@@ -9,7 +9,7 @@ Browser
   │
   ├── CloudFront ──► S3 (static frontend)
   │
-  ├── API Gateway ──► Lambda (api) ──► DynamoDB   (presigned URL + job status)
+  ├── API Gateway ──► Lambda (api) ──► DynamoDB   (presigned URL, job status, receipt history)
   │
   └── S3 presigned PUT ──► S3 (uploads)
                                 │
@@ -17,12 +17,12 @@ Browser
                                 │
                                SQS
                                 │
-                           Lambda (processor) ──► Bedrock us-east-1
-                                │                 (Llama 3.2 Vision 11B)
+                           Lambda (processor) ──► Textract AnalyzeExpense
+                                │                 (ap-southeast-2)
                                 └──► DynamoDB     (write result)
 ```
 
-**All infrastructure runs in `ap-southeast-2` (Sydney).** The processor Lambda calls Bedrock in `us-east-1` by configuring its boto3 client with `region_name="us-east-1"` — Llama 3.2 Vision is only available via the US cross-region inference profile.
+**All infrastructure runs in `ap-southeast-2` (Sydney).** Textract is called in the same region as the uploads bucket — no cross-region routing required.
 
 ### AWS services used
 
@@ -30,14 +30,14 @@ Browser
 |---|---|
 | CloudFront + S3 | Static frontend hosting |
 | Cognito | User authentication (hosted UI, OAuth2 code flow) |
-| API Gateway | REST API (`POST /upload-url`, `GET /jobs/{jobId}`) |
-| Lambda (api) | Presigned URL generation, JWT validation, job polling |
-| Lambda (processor) | Image resize, Bedrock inference, result storage |
+| API Gateway | REST API (`POST /upload-url`, `GET /jobs/{jobId}`, `GET /receipts`) |
+| Lambda (api) | Presigned URL generation, JWT validation, job polling, receipt history |
+| Lambda (processor) | Textract inference, result storage |
 | S3 (uploads) | Temporary image storage |
 | SQS | Decouples S3 upload events from Lambda processing |
-| DynamoDB | Job status and results |
+| DynamoDB | Job status and results (with GSI for per-user receipt history) |
+| Textract | `AnalyzeExpense` — extracts vendor, date, total, and line items |
 | IAM | Least-privilege roles for both Lambda functions |
-| Bedrock | Llama 3.2 Vision 11B inference (us-east-1) |
 
 ## Prerequisites
 
@@ -47,22 +47,11 @@ Browser
 
 ## Deploy
 
-### 1. Enable Bedrock model access
-
-**Do this first** — model access approval must be in place before Terraform apply.
-
-1. Open the AWS Console and switch to **us-east-1**
-2. Go to **Amazon Bedrock → Model access**
-3. Click **Modify model access**
-4. Find **Meta Llama 3.2 11B Instruct** and enable it
-5. Accept Meta's licence terms and save — approval is usually instant
-
-### 2. Install tools
+### 1. Install tools
 
 Run once. No `sudo` required — everything installs into `~/.local/`.
 
 ```bash
-cd bedrock-image-ai
 bash scripts/install_tools.sh
 export PATH="$HOME/.local/bin:$HOME/.local/venv/bin:$PATH"
 ```
@@ -70,9 +59,9 @@ export PATH="$HOME/.local/bin:$HOME/.local/venv/bin:$PATH"
 This installs:
 - Terraform 1.9.8
 - AWS CLI v2
-- Python dependencies (boto3, Pillow, python-jose) into a local venv
+- Python dependencies (boto3, python-jose) into a local venv
 
-### 3. Configure AWS credentials
+### 2. Configure AWS credentials
 
 ```bash
 export AWS_ACCESS_KEY_ID="your-key-id"
@@ -85,14 +74,14 @@ export AWS_SESSION_TOKEN="your-session-token"
 aws sts get-caller-identity
 ```
 
-### 4. Generate `terraform.tfvars`
+### 3. Generate `terraform.tfvars`
 
 ```bash
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-COGNITO_PREFIX="bedrock-image-ai-${ACCOUNT_ID: -6}"
+COGNITO_PREFIX="receipt-scanner-${ACCOUNT_ID: -6}"
 
 cat > terraform/terraform.tfvars <<EOF
-project_name          = "bedrock-image-ai"
+project_name          = "receipt-scanner"
 aws_account_id        = "${ACCOUNT_ID}"
 cognito_domain_prefix = "${COGNITO_PREFIX}"
 primary_region        = "ap-southeast-2"
@@ -102,14 +91,14 @@ EOF
 
 The Cognito domain prefix must be globally unique across all AWS accounts. If Terraform fails with a domain conflict, change `cognito_domain_prefix` to something unique and re-apply.
 
-### 5. Deploy
+### 4. Deploy
 
 ```bash
 make deploy
 ```
 
 This runs in sequence:
-1. `scripts/package_lambdas.sh` — builds Lambda deployment packages with platform-correct binary wheels
+1. `scripts/package_lambdas.sh` — builds Lambda deployment packages
 2. `terraform init && terraform apply` — provisions all AWS infrastructure (~10–15 min; CloudFront creation is the slowest step)
 3. `scripts/inject_config.py` — reads Terraform outputs, injects them into the frontend, and syncs to S3
 
@@ -119,7 +108,7 @@ When complete, the app URL is printed:
 Done! App live at: https://d1234abcd.cloudfront.net/
 ```
 
-### 6. Smoke test
+### 5. Smoke test
 
 ```bash
 make smoke
@@ -129,29 +118,22 @@ Checks that CloudFront returns HTTP 200 and the API returns HTTP 401 (no auth �
 
 ## Usage
 
-The web application is part of this project — it is built from the files in `frontend/` and deployed to S3/CloudFront as part of `make deploy`. No separate download or installation is required.
-
-When deployment completes, a URL is printed:
-
-```
-Done! App live at: https://d1234abcd.cloudfront.net/
-```
-
-Open that URL in any browser to use the app:
+Open the CloudFront URL printed at the end of `make deploy`.
 
 1. You are redirected to the Cognito hosted UI — register an account or sign in
 2. After login you are redirected back to the upload page
-3. Drop or select an image (JPEG, PNG, GIF, or WebP; max 3.75 MB)
-4. Click **Analyse**
-5. Watch the status update every 3 seconds: `PENDING → PROCESSING → COMPLETE`
-6. The result displays the emotion label, confidence score, and the model's reasoning
+3. Drop or select one or more receipt images (JPEG or PNG, max 5 MB each)
+4. Click **Scan receipts**
+5. All receipts are uploaded and scanned in parallel — status updates every 3 seconds
+6. Each completed receipt displays vendor, date, total, and a line-item table
+7. Previous receipts appear in the **Recent receipts** history section below
 
-To share the demo with others, send them the CloudFront URL. Each person registers their own Cognito account and can only see their own results.
+To share the demo with others, send them the CloudFront URL. Each person registers their own Cognito account and can only see their own receipts.
 
 ## Project structure
 
 ```
-bedrock-image-ai/
+receipt-scanner/
 ├── Makefile                        # deploy, plan, smoke, destroy targets
 ├── scripts/
 │   ├── install_tools.sh            # one-time tool installation
@@ -166,17 +148,17 @@ bedrock-image-ai/
 │   ├── s3.tf                       # frontend bucket (OAC) + uploads bucket (CORS)
 │   ├── cloudfront.tf               # distribution with OAC and SPA error handling
 │   ├── sqs.tf                      # main queue (360s visibility) + DLQ
-│   ├── dynamodb.tf                 # jobs table, PAY_PER_REQUEST, TTL
+│   ├── dynamodb.tf                 # jobs table, PAY_PER_REQUEST, TTL, user GSI
 │   ├── iam.tf                      # least-privilege roles for both Lambdas
 │   ├── lambda.tf                   # processor + api functions, SQS ESM
 │   ├── api_gateway.tf              # REST API, CORS, gateway responses
 │   └── terraform.tfvars.example
 ├── lambda/
 │   ├── processor/
-│   │   ├── handler.py              # SQS consumer → Bedrock → DynamoDB
-│   │   └── requirements.txt        # Pillow
+│   │   ├── handler.py              # SQS consumer → Textract AnalyzeExpense → DynamoDB
+│   │   └── requirements.txt
 │   └── api/
-│       ├── handler.py              # presigned URL + job polling, JWT validation
+│       ├── handler.py              # presigned URL, job polling, receipt history, JWT validation
 │       └── requirements.txt        # python-jose[cryptography]
 └── frontend/
     ├── index.html
@@ -204,7 +186,7 @@ python3 scripts/inject_config.py
 make destroy
 ```
 
-Destroys all AWS resources. S3 buckets must be empty first — empty them manually or add a `force_destroy = true` argument to both bucket resources in `terraform/s3.tf` before running destroy.
+Destroys all AWS resources. S3 buckets must be empty first — empty them manually or add `force_destroy = true` to both bucket resources in `terraform/s3.tf` before running destroy.
 
 ## Rate limiting
 
@@ -213,9 +195,9 @@ API Gateway throttling is applied at two levels:
 | Scope | Limit | Why |
 |---|---|---|
 | All methods (combined) | 10 req/s, burst 20 | Hard cap on total API traffic — returns HTTP 429 when exceeded |
-| `POST /upload-url` only | 2 req/s, burst 5 | Tighter limit since each call triggers a Bedrock inference job |
+| `POST /upload-url` only | 2 req/s, burst 5 | Tighter limit since each call triggers a Textract analysis job |
 
-This is stage-level (aggregate across all callers). If you need per-IP isolation — so one bad actor can't consume the whole budget — add WAF with a rate-based rule (~$6/month):
+This is stage-level (aggregate across all callers). For per-IP isolation add WAF with a rate-based rule (~$6/month):
 
 ```hcl
 # terraform/waf.tf
@@ -246,8 +228,8 @@ resource "aws_wafv2_web_acl_association" "api" {
 
 | Limitation | Detail |
 |---|---|
-| Model region | Llama 3.2 Vision is only available in US regions. All Bedrock calls route to `us-east-1` via cross-region inference profile. |
-| Model EOL | Llama 3.2 Vision 11B is marked Legacy (EOL July 2026). If it becomes unavailable, change `BEDROCK_MODEL_ID` in `terraform/lambda.tf` to `us.meta.llama3-2-90b-instruct-v1:0` or `us.amazon.nova-pro-v1:0`. |
-| Image size | Max 3.75 MB per image; max 1120×1120 px (images are auto-resized before inference). |
-| Processing time | Typically 15–45 seconds end-to-end depending on Bedrock latency. |
-| No job history | The UI shows the result of the most recent upload in the current session only. |
+| Image formats | JPEG and PNG only — Textract `AnalyzeExpense` does not support GIF or WebP. |
+| Image size | Max 5 MB per image. |
+| Receipt quality | Textract accuracy depends on image clarity. Poor lighting or low resolution will reduce field extraction quality. |
+| Processing time | Typically 5–20 seconds end-to-end depending on Textract latency. |
+| Receipt history | Shows the 20 most recent completed receipts per user (DynamoDB GSI with `Limit=20`). |
