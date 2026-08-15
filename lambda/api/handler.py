@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import boto3
+from botocore.config import Config
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
 UPLOADS_BUCKET = os.environ["UPLOADS_BUCKET"]
@@ -13,7 +14,12 @@ PRIMARY_REGION = os.environ.get("PRIMARY_REGION", "ap-southeast-2")
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 
 dynamodb = boto3.client("dynamodb", region_name=PRIMARY_REGION)
-s3 = boto3.client("s3", region_name=PRIMARY_REGION)
+s3 = boto3.client(
+    "s3",
+    region_name=PRIMARY_REGION,
+    endpoint_url=f"https://s3.{PRIMARY_REGION}.amazonaws.com",
+    config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
+)
 
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
@@ -25,8 +31,6 @@ CORS_HEADERS = {
 VALID_CONTENT_TYPES = {
     "image/jpeg": "jpg",
     "image/png": "png",
-    "image/gif": "gif",
-    "image/webp": "webp",
 }
 
 # Module-level JWKS cache — populated once per Lambda container (cold start only).
@@ -60,6 +64,8 @@ def lambda_handler(event, context):
 
     if method == "POST" and path.endswith("/upload-url"):
         return handle_upload_url(event, user_id)
+    elif method == "GET" and path.endswith("/receipts"):
+        return handle_list_receipts(user_id)
     elif method == "GET" and "/jobs/" in path:
         job_id = (event.get("pathParameters") or {}).get("jobId")
         return handle_get_job(job_id, user_id)
@@ -105,6 +111,20 @@ def handle_upload_url(event, user_id: str):
     return make_response(200, {"jobId": job_id, "uploadUrl": upload_url, "s3Key": s3_key})
 
 
+def handle_list_receipts(user_id: str):
+    result = dynamodb.query(
+        TableName=DYNAMODB_TABLE,
+        IndexName="user-jobs-index",
+        KeyConditionExpression="#uid = :uid",
+        ExpressionAttributeNames={"#uid": "user_id"},
+        ExpressionAttributeValues={":uid": {"S": user_id}},
+        ScanIndexForward=False,
+        Limit=20,
+    )
+    receipts = [format_receipt(item) for item in result.get("Items", [])]
+    return make_response(200, {"receipts": receipts})
+
+
 def handle_get_job(job_id: str | None, user_id: str):
     if not job_id:
         return make_response(400, {"error": "jobId required"})
@@ -120,16 +140,25 @@ def handle_get_job(job_id: str | None, user_id: str):
     if item.get("user_id", {}).get("S") != user_id:
         return make_response(403, {"error": "Forbidden"})
 
-    confidence = item.get("confidence")
-    return make_response(200, {
+    return make_response(200, format_receipt(item))
+
+
+def format_receipt(item: dict) -> dict:
+    items_raw = item.get("items", {}).get("S", "[]")
+    try:
+        line_items = json.loads(items_raw)
+    except (json.JSONDecodeError, TypeError):
+        line_items = []
+    return {
         "jobId": item["job_id"]["S"],
         "status": item.get("status", {}).get("S", "UNKNOWN"),
-        "label": item.get("label", {}).get("S"),
-        "reasoning": item.get("reasoning", {}).get("S"),
-        "confidence": float(confidence["N"]) if confidence else None,
+        "vendor": item.get("vendor", {}).get("S"),
+        "receiptDate": item.get("receipt_date", {}).get("S"),
+        "total": item.get("total", {}).get("S"),
+        "items": line_items,
         "createdAt": item.get("created_at", {}).get("S"),
         "updatedAt": item.get("updated_at", {}).get("S"),
-    })
+    }
 
 
 def get_user_id(event) -> str:
@@ -148,7 +177,7 @@ def get_user_id(event) -> str:
         token,
         jwks,
         algorithms=["RS256"],
-        options={"verify_aud": False},
+        options={"verify_aud": False, "verify_at_hash": False},
     )
     return claims["sub"]
 

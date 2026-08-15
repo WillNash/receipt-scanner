@@ -16,7 +16,7 @@ plan: package
 
 apply: package
 	terraform -chdir=$(TERRAFORM_DIR) init -upgrade
-	terraform -chdir=$(TERRAFORM_DIR) apply -var-file=terraform.tfvars -auto-approve
+	terraform -chdir=$(TERRAFORM_DIR) apply -var-file=terraform.tfvars
 
 deploy: apply
 	python3 $(SCRIPTS_DIR)/inject_config.py
@@ -25,4 +25,4 @@ smoke:
 	python3 $(SCRIPTS_DIR)/smoke_test.py
 
 destroy:
-	terraform -chdir=$(TERRAFORM_DIR) destroy -var-file=terraform.tfvars -auto-approve
+	terraform -chdir=$(TERRAFORM_DIR) destroy -var-file=terraform.tfvars

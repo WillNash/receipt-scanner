@@ -12,7 +12,7 @@ data "archive_file" "api_zip" {
   output_path = "${path.module}/../lambda/api/api.zip"
 }
 
-## Processor Lambda — runs in ap-southeast-2; boto3 Bedrock client uses region_name="us-east-1"
+## Processor Lambda — runs in ap-southeast-2; calls Textract in the same region
 
 resource "aws_lambda_function" "bedrock_processor" {
   function_name    = "${var.project_name}-processor"
@@ -26,11 +26,9 @@ resource "aws_lambda_function" "bedrock_processor" {
 
   environment {
     variables = {
-      DYNAMODB_TABLE   = aws_dynamodb_table.jobs.name
-      DYNAMODB_REGION  = var.primary_region
-      BEDROCK_MODEL_ID = "us.meta.llama3-2-11b-instruct-v1:0"
+      DYNAMODB_TABLE    = aws_dynamodb_table.jobs.name
       S3_UPLOADS_BUCKET = aws_s3_bucket.uploads.bucket
-      S3_REGION        = var.primary_region
+      PRIMARY_REGION    = var.primary_region
     }
   }
 

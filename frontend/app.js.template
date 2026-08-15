@@ -8,14 +8,15 @@ const CONFIG = {
   redirectUri:     "__REDIRECT_URI__",
 };
 
-// ── State ─────────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-let currentJobId = sessionStorage.getItem("currentJobId") || null;
-let pollTimer = null;
-let pollCount = 0;
+const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_POLLS = 60;
 const POLL_INTERVAL_MS = 3000;
-const MAX_FILE_BYTES = 3.75 * 1024 * 1024;
+
+// ── State ─────────────────────────────────────────────────────────────────────
+
+let selectedFiles = [];
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -47,7 +48,6 @@ async function exchangeCode(code) {
   const data = await resp.json();
   sessionStorage.setItem("id_token", data.id_token);
   sessionStorage.setItem("access_token", data.access_token);
-  // Remove ?code= from URL without triggering a reload
   history.replaceState({}, document.title, window.location.pathname);
 }
 
@@ -55,8 +55,7 @@ async function exchangeCode(code) {
 
 async function init() {
   const token = getToken();
-  const urlParams = new URLSearchParams(window.location.search);
-  const code = urlParams.get("code");
+  const code = new URLSearchParams(window.location.search).get("code");
 
   if (token) {
     showApp();
@@ -77,19 +76,19 @@ async function init() {
   window.location.href = CONFIG.cognitoLoginUrl;
 }
 
-function showApp() {
+async function showApp() {
   document.getElementById("logout-btn").style.display = "";
-  showSection("upload-section");
+  showMainSection("upload-section");
+  await loadHistory();
 }
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
 
-function showSection(id) {
-  ["upload-section", "status-section", "result-section", "failed-section"]
-    .forEach(s => {
-      const el = document.getElementById(s);
-      if (el) el.style.display = s === id ? "" : "none";
-    });
+function showMainSection(id) {
+  ["upload-section", "status-section", "results-section"].forEach(s => {
+    const el = document.getElementById(s);
+    if (el) el.style.display = s === id ? "" : "none";
+  });
 }
 
 function setStatus(text) {
@@ -108,117 +107,214 @@ function clearError() {
   el.style.display = "none";
 }
 
-function renderResult(job) {
-  const label = (job.label || "").toLowerCase();
-  const badge = document.getElementById("emotion-badge");
-  badge.textContent = label === "happy" ? "Happy 😊" : "Sad 😢";
-  badge.className = `emotion-badge ${label}`;
-
-  const pct = Math.round((job.confidence || 0) * 100);
-  document.getElementById("confidence-bar").style.width = `${pct}%`;
-  document.getElementById("confidence-pct").textContent = `${pct}%`;
-  document.getElementById("reasoning-text").textContent = job.reasoning || "";
-
-  showSection("result-section");
+function escapeHtml(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
-// ── Upload flow ───────────────────────────────────────────────────────────────
+// ── File selection ────────────────────────────────────────────────────────────
 
-function validateFile(file) {
-  if (!file.type.startsWith("image/")) {
-    return "Please select an image file.";
-  }
-  if (file.size > MAX_FILE_BYTES) {
-    return "File must be smaller than 3.75 MB.";
-  }
-  return null;
-}
-
-async function handleUpload(file) {
+function selectFiles(files) {
   clearError();
-  const err = validateFile(file);
-  if (err) { showError(err); return; }
+  for (const file of files) {
+    if (!["image/jpeg", "image/png"].includes(file.type)) {
+      showError(`${file.name}: only JPEG and PNG are supported.`);
+      continue;
+    }
+    if (file.size > MAX_FILE_BYTES) {
+      showError(`${file.name} exceeds 5 MB.`);
+      continue;
+    }
+    if (!selectedFiles.find(f => f.name === file.name && f.size === file.size)) {
+      selectedFiles.push(file);
+    }
+  }
+  renderQueue();
+}
 
-  showSection("status-section");
-  setStatus("Requesting upload URL…");
+function renderQueue() {
+  const list = document.getElementById("file-queue");
+  const controls = document.getElementById("scan-controls");
+  list.innerHTML = "";
+
+  if (selectedFiles.length === 0) {
+    list.style.display = "none";
+    controls.style.display = "none";
+    return;
+  }
+
+  list.style.display = "";
+  controls.style.display = "";
+
+  selectedFiles.forEach((file, i) => {
+    const li = document.createElement("li");
+    li.className = "queue-item";
+    li.innerHTML = `
+      <span class="queue-name">${escapeHtml(file.name)}</span>
+      <span class="queue-size">${(file.size / 1024).toFixed(0)} KB</span>
+      <button class="queue-remove" data-index="${i}" aria-label="Remove ${escapeHtml(file.name)}">✕</button>
+    `;
+    list.appendChild(li);
+  });
+}
+
+// ── Upload + process flow ─────────────────────────────────────────────────────
+
+async function handleUpload() {
+  if (selectedFiles.length === 0) return;
+  clearError();
+  showMainSection("status-section");
+
+  const count = selectedFiles.length;
+  setStatus(`Uploading ${count} receipt${count > 1 ? "s" : ""}…`);
+
+  const filesToProcess = [...selectedFiles];
+  selectedFiles = [];
 
   try {
-    // Step 1 — get presigned URL
-    const urlResp = await fetch(`${CONFIG.apiBaseUrl}/upload-url`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${getToken()}`,
-      },
-      body: JSON.stringify({ contentType: file.type }),
-    });
-    if (!urlResp.ok) {
-      const body = await urlResp.json().catch(() => ({}));
-      throw new Error(body.error || `HTTP ${urlResp.status}`);
-    }
-    const { jobId, uploadUrl } = await urlResp.json();
+    // Step 1 — get presigned URLs in parallel
+    const urlResults = await Promise.all(
+      filesToProcess.map(file =>
+        fetch(`${CONFIG.apiBaseUrl}/upload-url`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${getToken()}`,
+          },
+          body: JSON.stringify({ contentType: file.type }),
+        }).then(async r => {
+          if (!r.ok) {
+            const b = await r.json().catch(() => ({}));
+            throw new Error(b.error || `HTTP ${r.status}`);
+          }
+          return r.json();
+        })
+      )
+    );
 
-    // Step 2 — PUT directly to S3 via presigned URL
-    setStatus("Uploading image…");
-    const putResp = await fetch(uploadUrl, {
-      method: "PUT",
-      headers: { "Content-Type": file.type },
-      body: file,
-    });
-    if (!putResp.ok) throw new Error(`S3 upload failed: ${putResp.status}`);
+    // Step 2 — PUT files to S3 in parallel
+    setStatus("Uploading images…");
+    await Promise.all(
+      filesToProcess.map((file, i) =>
+        fetch(urlResults[i].uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": file.type },
+          body: file,
+        }).then(r => {
+          if (!r.ok) throw new Error(`S3 upload failed for ${file.name}: ${r.status}`);
+        })
+      )
+    );
 
-    // Step 3 — start polling
-    currentJobId = jobId;
-    sessionStorage.setItem("currentJobId", jobId);
-    setStatus("Analysing image…");
-    startPolling(jobId);
+    // Step 3 — poll all jobs in parallel
+    const jobIds = urlResults.map(r => r.jobId);
+    setStatus(`Scanning ${jobIds.length} receipt${jobIds.length > 1 ? "s" : ""}…`);
+    const results = await Promise.all(jobIds.map(id => pollUntilDone(id)));
 
+    renderResults(results);
+    await loadHistory();
   } catch (err) {
     console.error("Upload error:", err);
-    showSection("upload-section");
+    renderQueue();
+    showMainSection("upload-section");
     showError(`Upload failed: ${err.message}`);
   }
 }
 
-// ── Polling ───────────────────────────────────────────────────────────────────
-
-function startPolling(jobId) {
-  pollCount = 0;
-  clearTimeout(pollTimer);
-  poll(jobId);
-}
-
-async function poll(jobId) {
-  if (pollCount >= MAX_POLLS) {
-    showSection("failed-section");
-    return;
-  }
-  pollCount++;
-
+async function pollUntilDone(jobId, count = 0) {
+  if (count >= MAX_POLLS) return { jobId, status: "FAILED" };
   try {
     const resp = await fetch(`${CONFIG.apiBaseUrl}/jobs/${jobId}`, {
       headers: { "Authorization": `Bearer ${getToken()}` },
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const job = await resp.json();
-
-    switch (job.status) {
-      case "COMPLETE":
-        sessionStorage.removeItem("currentJobId");
-        renderResult(job);
-        break;
-      case "FAILED":
-        sessionStorage.removeItem("currentJobId");
-        showSection("failed-section");
-        break;
-      default:
-        // PENDING or PROCESSING — keep polling
-        pollTimer = setTimeout(() => poll(jobId), POLL_INTERVAL_MS);
-    }
+    if (job.status === "COMPLETE" || job.status === "FAILED") return job;
   } catch (err) {
-    console.error("Poll error:", err);
-    pollTimer = setTimeout(() => poll(jobId), POLL_INTERVAL_MS);
+    console.error(`Poll error for ${jobId}:`, err);
   }
+  await new Promise(res => setTimeout(res, POLL_INTERVAL_MS));
+  return pollUntilDone(jobId, count + 1);
+}
+
+// ── Receipt rendering ─────────────────────────────────────────────────────────
+
+function renderResults(jobs) {
+  const list = document.getElementById("results-list");
+  list.innerHTML = "";
+  jobs.forEach(job => list.appendChild(buildReceiptCard(job)));
+  showMainSection("results-section");
+}
+
+function buildReceiptCard(job) {
+  const card = document.createElement("div");
+
+  if (job.status === "FAILED") {
+    card.className = "receipt-card receipt-card--failed";
+    card.innerHTML = `<p class="failed-text">Scan failed — could not read this receipt.</p>`;
+    return card;
+  }
+
+  card.className = "receipt-card";
+
+  const items = Array.isArray(job.items) ? job.items : [];
+  const itemsHtml = items.length ? `
+    <table class="items-table">
+      <thead>
+        <tr>
+          <th>Item</th><th>Qty</th><th>Unit price</th><th>Price</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${items.map(it => `
+          <tr>
+            <td>${escapeHtml(it.description)}</td>
+            <td>${escapeHtml(it.quantity)}</td>
+            <td>${escapeHtml(it.unit_price)}</td>
+            <td>${escapeHtml(it.price)}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>` : "";
+
+  card.innerHTML = `
+    <div class="receipt-header">
+      <span class="receipt-vendor">${escapeHtml(job.vendor || "Unknown vendor")}</span>
+      ${job.total ? `<span class="receipt-total">${escapeHtml(job.total)}</span>` : ""}
+    </div>
+    ${job.receiptDate ? `<div class="receipt-meta"><span class="receipt-date">${escapeHtml(job.receiptDate)}</span></div>` : ""}
+    ${itemsHtml}
+  `;
+  return card;
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+
+async function loadHistory() {
+  try {
+    const resp = await fetch(`${CONFIG.apiBaseUrl}/receipts`, {
+      headers: { "Authorization": `Bearer ${getToken()}` },
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    renderHistory(data.receipts || []);
+  } catch (err) {
+    console.error("History load error:", err);
+  }
+}
+
+function renderHistory(receipts) {
+  const section = document.getElementById("history-section");
+  const list = document.getElementById("history-list");
+  const complete = receipts.filter(r => r.status === "COMPLETE");
+  if (complete.length === 0) {
+    section.style.display = "none";
+    return;
+  }
+  list.innerHTML = "";
+  complete.forEach(job => list.appendChild(buildReceiptCard(job)));
+  section.style.display = "";
 }
 
 // ── Event listeners ───────────────────────────────────────────────────────────
@@ -228,50 +324,48 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const dropZone = document.getElementById("drop-zone");
   const fileInput = document.getElementById("file-input");
-  const fileInfo  = document.getElementById("file-info");
-  const fileName  = document.getElementById("file-name");
-  let selectedFile = null;
-
-  function selectFile(file) {
-    selectedFile = file;
-    fileName.textContent = file.name;
-    fileInfo.style.display = "";
-    clearError();
-  }
 
   dropZone.addEventListener("click", () => fileInput.click());
-  dropZone.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") fileInput.click(); });
-
-  dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
-  dropZone.addEventListener("dragleave",  () => dropZone.classList.remove("drag-over"));
+  dropZone.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " ") fileInput.click();
+  });
+  dropZone.addEventListener("dragover", e => {
+    e.preventDefault();
+    dropZone.classList.add("drag-over");
+  });
+  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
   dropZone.addEventListener("drop", e => {
     e.preventDefault();
     dropZone.classList.remove("drag-over");
-    const file = e.dataTransfer.files[0];
-    if (file) selectFile(file);
+    selectFiles(Array.from(e.dataTransfer.files));
   });
 
   fileInput.addEventListener("change", () => {
-    if (fileInput.files[0]) selectFile(fileInput.files[0]);
+    selectFiles(Array.from(fileInput.files));
+    fileInput.value = "";
   });
 
-  document.getElementById("analyse-btn").addEventListener("click", () => {
-    if (selectedFile) handleUpload(selectedFile);
+  document.getElementById("file-queue").addEventListener("click", e => {
+    const btn = e.target.closest("[data-index]");
+    if (btn) {
+      selectedFiles.splice(parseInt(btn.dataset.index, 10), 1);
+      renderQueue();
+    }
+  });
+
+  document.getElementById("scan-btn").addEventListener("click", handleUpload);
+
+  document.getElementById("clear-btn").addEventListener("click", () => {
+    selectedFiles = [];
+    fileInput.value = "";
+    renderQueue();
+    clearError();
+  });
+
+  document.getElementById("scan-another-btn").addEventListener("click", () => {
+    renderQueue();
+    showMainSection("upload-section");
   });
 
   document.getElementById("logout-btn").addEventListener("click", logout);
-
-  document.getElementById("upload-another-btn").addEventListener("click", () => {
-    selectedFile = null;
-    fileInput.value = "";
-    fileInfo.style.display = "none";
-    showSection("upload-section");
-  });
-
-  document.getElementById("retry-btn").addEventListener("click", () => {
-    selectedFile = null;
-    fileInput.value = "";
-    fileInfo.style.display = "none";
-    showSection("upload-section");
-  });
 });

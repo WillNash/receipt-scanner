@@ -1,11 +1,7 @@
 ## IAM is a global service; both roles are created with the default provider.
 ## No provider alias is needed — both Lambda functions run in ap-southeast-2.
 
-locals {
-  bedrock_inference_profile_arn = "arn:aws:bedrock:us-east-1:${var.aws_account_id}:inference-profile/us.meta.llama3-2-11b-instruct-v1:0"
-}
-
-## Role 1 — Processor Lambda (ap-southeast-2; calls Bedrock in us-east-1 via explicit region_name)
+## Role 1 — Processor Lambda (ap-southeast-2; calls Textract in ap-southeast-2)
 
 resource "aws_iam_role" "lambda_processor" {
   name = "${var.project_name}-processor-role"
@@ -51,27 +47,11 @@ resource "aws_iam_role_policy" "lambda_processor" {
         Resource = "${aws_s3_bucket.uploads.arn}/*"
       },
       {
-        Sid      = "BedrockInvokeProfile"
+        # AnalyzeExpense does not support resource-level restrictions
+        Sid      = "TextractAnalyzeExpense"
         Effect   = "Allow"
-        Action   = "bedrock:InvokeModel"
-        Resource = local.bedrock_inference_profile_arn
-      },
-      {
-        # Foundation model ARNs for all destination regions of the US geo profile.
-        # The Condition restricts this to calls made via our specific inference profile.
-        Sid    = "BedrockInvokeFoundationModels"
-        Effect = "Allow"
-        Action = "bedrock:InvokeModel"
-        Resource = [
-          "arn:aws:bedrock:us-east-1::foundation-model/meta.llama3-2-11b-instruct-v1:0",
-          "arn:aws:bedrock:us-east-2::foundation-model/meta.llama3-2-11b-instruct-v1:0",
-          "arn:aws:bedrock:us-west-2::foundation-model/meta.llama3-2-11b-instruct-v1:0",
-        ]
-        Condition = {
-          StringEquals = {
-            "bedrock:InferenceProfileArn" = local.bedrock_inference_profile_arn
-          }
-        }
+        Action   = "textract:AnalyzeExpense"
+        Resource = "*"
       },
       {
         Sid    = "DynamoDBWrite"

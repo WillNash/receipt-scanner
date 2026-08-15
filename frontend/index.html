@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Image Emotion Classifier</title>
+  <title>Receipt Scanner</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div id="app">
     <header>
-      <h1>Image Emotion Classifier</h1>
+      <h1>Receipt Scanner</h1>
       <button id="logout-btn" class="btn btn-secondary" style="display:none">Sign out</button>
     </header>
 
@@ -21,57 +21,47 @@
           class="drop-zone"
           role="button"
           tabindex="0"
-          aria-label="Drop an image here or click to select"
+          aria-label="Drop receipt images here or click to select"
         >
           <div class="drop-zone-inner">
             <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
             </svg>
-            <p class="drop-hint">Drop an image here</p>
-            <p class="drop-sub">or</p>
-            <label class="btn btn-primary" for="file-input">Choose file</label>
-            <input type="file" id="file-input" accept="image/*" style="display:none" />
+            <p class="drop-hint">Drop receipt images here</p>
+            <p class="drop-sub">JPEG or PNG, up to 5 MB each</p>
+            <label class="btn btn-primary" for="file-input">Choose files</label>
+            <input type="file" id="file-input" accept="image/jpeg,image/png" multiple style="display:none" />
           </div>
         </div>
 
-        <div id="file-info" class="file-info" style="display:none">
-          <span id="file-name"></span>
-          <button id="analyse-btn" class="btn btn-primary">Analyse</button>
+        <ul id="file-queue" class="file-queue" style="display:none"></ul>
+
+        <div id="scan-controls" class="scan-controls" style="display:none">
+          <button id="scan-btn" class="btn btn-primary">Scan receipts</button>
+          <button id="clear-btn" class="btn btn-secondary">Clear</button>
         </div>
 
         <p id="upload-error" class="error-text" style="display:none"></p>
       </section>
 
-      <!-- Status section (shown while processing) -->
+      <!-- Status section (shown while uploading / processing) -->
       <section id="status-section" style="display:none">
         <div class="status-card">
-          <div id="status-spinner" class="spinner"></div>
+          <div class="spinner"></div>
           <p id="status-text" class="status-text">Uploading…</p>
         </div>
       </section>
 
-      <!-- Result section (shown on completion) -->
-      <section id="result-section" style="display:none">
-        <div class="result-card">
-          <div id="emotion-badge" class="emotion-badge"></div>
-          <div class="confidence-wrap">
-            <span class="confidence-label">Confidence</span>
-            <div class="confidence-bar-track">
-              <div id="confidence-bar" class="confidence-bar"></div>
-            </div>
-            <span id="confidence-pct" class="confidence-pct"></span>
-          </div>
-          <p id="reasoning-text" class="reasoning-text"></p>
-          <button id="upload-another-btn" class="btn btn-secondary">Analyse another image</button>
-        </div>
+      <!-- Results section (shown after scan completes) -->
+      <section id="results-section" style="display:none">
+        <div id="results-list"></div>
+        <button id="scan-another-btn" class="btn btn-primary" style="margin-top:1.25rem">Scan more receipts</button>
       </section>
 
-      <!-- Failed section -->
-      <section id="failed-section" style="display:none">
-        <div class="result-card result-card--failed">
-          <p class="failed-text">Classification failed. Please try another image.</p>
-          <button id="retry-btn" class="btn btn-secondary">Try again</button>
-        </div>
+      <!-- History section (always visible when receipts exist) -->
+      <section id="history-section" style="display:none">
+        <h2 class="section-title">Recent receipts</h2>
+        <div id="history-list"></div>
       </section>
     </main>
   </div>
