@@ -74,6 +74,7 @@ def analyze_receipt(bucket: str, key: str) -> dict:
     response = textract.analyze_expense(
         Document={"S3Object": {"Bucket": bucket, "Name": key}}
     )
+    print("TEXTRACT_RAW_RESPONSE", json.dumps(response, default=str))
 
     vendor = ""
     receipt_date = ""
@@ -108,11 +109,15 @@ def analyze_receipt(bucket: str, key: str) -> dict:
                 if item:
                     items.append(item)
 
+    print("TEXTRACT_RAW_ITEMS", json.dumps(items))
+    reconciled = reconcile_line_items(items)
+    print("TEXTRACT_RECONCILED_ITEMS", json.dumps(reconciled))
+
     return {
         "vendor": vendor or "Unknown vendor",
         "receipt_date": receipt_date or "",
         "total": total or "",
-        "items": reconcile_line_items(items),
+        "items": reconciled,
     }
 
 
@@ -151,25 +156,37 @@ def reconcile_line_items(items: list) -> list:
                 item.pop("unit_price", None)
                 item.pop("price", None)
 
-    # Pass 2 — merge orphan price rows into the preceding description-only row
+    # Pass 2 — merge orphan price rows with unpriced description rows.
+    # They are not necessarily adjacent: Textract may order the second line of a
+    # multi-unit item well away from its description. Collect both sets globally,
+    # pair them in order of first appearance, and insert the merged item at the
+    # description's original position (preserving receipt order).
+    desc_only = [
+        i for i, it in enumerate(items)
+        if it.get("description", "").strip()
+        and not (it.get("price") or it.get("unit_price") or it.get("quantity"))
+    ]
+    price_only = [
+        i for i, it in enumerate(items)
+        if (it.get("price") or it.get("unit_price") or it.get("quantity"))
+        and not it.get("description", "").strip()
+    ]
+
+    # Pair description-only with price-only in positional order
+    merged_at = {}   # desc index -> merged item dict
+    skip = set()     # price-only indices to drop (merged into desc position)
+    for desc_idx, price_idx in zip(desc_only, price_only):
+        merged_at[desc_idx] = {**items[price_idx], "description": items[desc_idx]["description"]}
+        skip.add(price_idx)
+
     result = []
-    i = 0
-    while i < len(items):
-        item = items[i]
-        has_desc = bool(item.get("description", "").strip())
-        has_pricing = bool(item.get("price") or item.get("unit_price") or item.get("quantity"))
-
-        if has_desc and not has_pricing and i + 1 < len(items):
-            nxt = items[i + 1]
-            if (bool(nxt.get("price") or nxt.get("unit_price") or nxt.get("quantity"))
-                    and not bool(nxt.get("description", "").strip())):
-                result.append({**nxt, "description": item["description"]})
-                i += 2
-                continue
-
-        if has_desc or has_pricing:
+    for i, item in enumerate(items):
+        if i in skip:
+            continue
+        if i in merged_at:
+            result.append(merged_at[i])
+        elif item.get("description", "").strip() or item.get("price") or item.get("unit_price") or item.get("quantity"):
             result.append(item)
-        i += 1
 
     return result
 
