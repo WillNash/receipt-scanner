@@ -71,6 +71,7 @@ def process_record(record):
             continue
 
         user_id = existing_item.get("user_id", {}).get("S", "unknown")
+        user_email = existing_item.get("email", {}).get("S", "")
         created_at = existing_item.get("created_at", {}).get("S", now_iso())
 
         update_job(job_id, {
@@ -96,6 +97,7 @@ def process_record(record):
             write_line_items(
                 job_id=job_id,
                 user_id=user_id,
+                user_email=user_email,
                 created_at=created_at,
                 vendor=result["vendor"],
                 receipt_date=result["receipt_date"],
@@ -493,6 +495,7 @@ def reconcile_line_items(items: list) -> list:
 def write_line_items(
     job_id: str,
     user_id: str,
+    user_email: str,
     created_at: str,
     vendor: str,
     receipt_date: str,
@@ -525,6 +528,7 @@ def write_line_items(
             "job_id":        {"S": job_id},
             "description":   {"S": description},
             "desc_created":  {"S": desc_created},
+            "email":         {"S": user_email},
             "vendor":        {"S": vendor},
             "receipt_date":  {"S": receipt_date},
             "created_at":    {"S": created_at},

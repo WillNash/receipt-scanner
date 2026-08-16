@@ -58,12 +58,12 @@ def lambda_handler(event, context):
         return make_response(200, {})
 
     try:
-        user_id = get_user_id(event)
+        user_id, user_email = get_user_id(event)
     except Exception as exc:
         return make_response(401, {"error": f"Unauthorized: {exc}"})
 
     if method == "POST" and path.endswith("/upload-url"):
-        return handle_upload_url(event, user_id)
+        return handle_upload_url(event, user_id, user_email)
     elif method == "GET" and path.endswith("/receipts"):
         return handle_list_receipts(user_id)
     elif method == "GET" and "/jobs/" in path:
@@ -73,7 +73,7 @@ def lambda_handler(event, context):
         return make_response(404, {"error": "Not found"})
 
 
-def handle_upload_url(event, user_id: str):
+def handle_upload_url(event, user_id: str, user_email: str):
     body = json.loads(event.get("body") or "{}")
     content_type = body.get("contentType", "image/jpeg")
 
@@ -91,6 +91,7 @@ def handle_upload_url(event, user_id: str):
         Item={
             "job_id": {"S": job_id},
             "user_id": {"S": user_id},
+            "email": {"S": user_email},
             "s3_key": {"S": s3_key},
             "status": {"S": "PENDING"},
             "created_at": {"S": now},
@@ -176,8 +177,8 @@ def format_receipt(item: dict) -> dict:
     }
 
 
-def get_user_id(event) -> str:
-    """Validate the Cognito JWT in the Authorization header and return the sub claim."""
+def get_user_id(event) -> tuple[str, str]:
+    """Validate the Cognito JWT and return (sub, email)."""
     from jose import jwt
 
     headers = event.get("headers") or {}
@@ -194,7 +195,7 @@ def get_user_id(event) -> str:
         algorithms=["RS256"],
         options={"verify_aud": False, "verify_at_hash": False},
     )
-    return claims["sub"]
+    return claims["sub"], claims.get("email", "")
 
 
 def make_response(status_code: int, body: dict) -> dict:
