@@ -54,6 +54,12 @@ resource "aws_iam_role_policy" "lambda_processor" {
         Resource = "*"
       },
       {
+        Sid      = "S3DebugWrite"
+        Effect   = "Allow"
+        Action   = "s3:PutObject"
+        Resource = "${aws_s3_bucket.uploads.arn}/debug/*"
+      },
+      {
         Sid    = "DynamoDBWrite"
         Effect = "Allow"
         Action = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem"]
@@ -112,6 +118,13 @@ resource "aws_iam_role_policy" "lambda_api" {
         Effect   = "Allow"
         Action   = "s3:PutObject"
         Resource = "${aws_s3_bucket.uploads.arn}/*"
+      },
+      {
+        # GetObject is required to generate presigned GET URLs for debug downloads
+        Sid      = "S3DebugRead"
+        Effect   = "Allow"
+        Action   = "s3:GetObject"
+        Resource = "${aws_s3_bucket.uploads.arn}/debug/*"
       },
     ]
   })

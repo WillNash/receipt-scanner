@@ -285,6 +285,7 @@ function buildReceiptCard(job) {
     </div>
     ${job.receiptDate ? `<div class="receipt-meta"><span class="receipt-date">${escapeHtml(job.receiptDate)}</span></div>` : ""}
     ${itemsHtml}
+    ${job.debugUrl ? `<div style="margin-top:0.75rem"><a href="${escapeHtml(job.debugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Download raw Textract response</a></div>` : ""}
   `;
   return card;
 }

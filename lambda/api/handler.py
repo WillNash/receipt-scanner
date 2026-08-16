@@ -149,6 +149,20 @@ def format_receipt(item: dict) -> dict:
         line_items = json.loads(items_raw)
     except (json.JSONDecodeError, TypeError):
         line_items = []
+
+    debug_url = None
+    debug_key = item.get("debug_s3_key", {}).get("S")
+    if debug_key:
+        debug_url = s3.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": UPLOADS_BUCKET,
+                "Key": debug_key,
+                "ResponseContentDisposition": f"attachment; filename=textract_{item['job_id']['S']}.json",
+            },
+            ExpiresIn=3600,
+        )
+
     return {
         "jobId": item["job_id"]["S"],
         "status": item.get("status", {}).get("S", "UNKNOWN"),
@@ -156,6 +170,7 @@ def format_receipt(item: dict) -> dict:
         "receiptDate": item.get("receipt_date", {}).get("S"),
         "total": item.get("total", {}).get("S"),
         "items": line_items,
+        "debugUrl": debug_url,
         "createdAt": item.get("created_at", {}).get("S"),
         "updatedAt": item.get("updated_at", {}).get("S"),
     }

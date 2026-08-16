@@ -63,7 +63,7 @@ def process_record(record):
             "updated_at": {"S": now_iso()},
         })
 
-        result = analyze_receipt(bucket, key)
+        result = analyze_receipt(bucket, key, job_id)
 
         expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
         update_job(job_id, {
@@ -72,16 +72,30 @@ def process_record(record):
             "receipt_date": {"S": result["receipt_date"]},
             "total": {"S": result["total"]},
             "items": {"S": json.dumps(result["items"])},
+            "debug_s3_key": {"S": result["debug_s3_key"]},
             "updated_at": {"S": now_iso()},
             "expires_at": {"N": str(expiry)},
         })
 
 
-def analyze_receipt(bucket: str, key: str) -> dict:
+def save_debug(job_id: str, payload: dict) -> str:
+    """Persist raw Textract response to S3 and return the object key."""
+    debug_key = f"debug/{job_id}.json"
+    s3.put_object(
+        Bucket=S3_BUCKET,
+        Key=debug_key,
+        Body=json.dumps(payload, default=str).encode(),
+        ContentType="application/json",
+    )
+    return debug_key
+
+
+def analyze_receipt(bucket: str, key: str, job_id: str) -> dict:
     response = textract.analyze_document(
         Document={"S3Object": {"Bucket": bucket, "Name": key}},
         FeatureTypes=["TABLES", "FORMS"],
     )
+    debug_s3_key = save_debug(job_id, response)
     print("TEXTRACT_BLOCK_COUNT", len(response.get("Blocks", [])))
 
     blocks_by_id = {b["Id"]: b for b in response.get("Blocks", [])}
@@ -101,6 +115,7 @@ def analyze_receipt(bucket: str, key: str) -> dict:
         "receipt_date": receipt_date or "",
         "total": total or "",
         "items": reconciled,
+        "debug_s3_key": debug_s3_key,
     }
 
 
