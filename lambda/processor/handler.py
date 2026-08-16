@@ -14,6 +14,13 @@ s3 = boto3.client("s3", region_name=PRIMARY_REGION)
 dynamodb = boto3.client("dynamodb", region_name=PRIMARY_REGION)
 textract = boto3.client("textract", region_name=PRIMARY_REGION)
 
+FOOTER_RE = re.compile(
+    r"\b(TOTAL|SUBTOTAL|SUB\s+TOTAL|BALANCE\s+DUE|EFTPOS|GST|TAX|"
+    r"CHANGE|CASH|CREDIT|DEBIT|CARD|PURCHASE|TERMINAL|TRAN|CHEQUE|SUPERVISOR)\b",
+    re.IGNORECASE,
+)
+HEADER_DESCS = {"ITEM", "DESCRIPTION", "PRODUCT", "ITEMS", "ITEM NAME"}
+
 
 def lambda_handler(event, context):
     batch_item_failures = []
@@ -78,9 +85,12 @@ def analyze_receipt(bucket: str, key: str) -> dict:
     print("TEXTRACT_BLOCK_COUNT", len(response.get("Blocks", [])))
 
     blocks_by_id = {b["Id"]: b for b in response.get("Blocks", [])}
+    word_to_line = build_word_to_line_map(blocks_by_id)
+    is_landscape = detect_is_landscape(blocks_by_id)
+    print("TEXTRACT_ORIENTATION", "landscape" if is_landscape else "portrait")
 
     vendor, receipt_date, total = extract_summary_fields(blocks_by_id)
-    items = extract_line_items(blocks_by_id)
+    items = extract_line_items(blocks_by_id, word_to_line, is_landscape)
 
     print("TEXTRACT_RAW_ITEMS", json.dumps(items))
     reconciled = reconcile_line_items(items)
@@ -94,8 +104,39 @@ def analyze_receipt(bucket: str, key: str) -> dict:
     }
 
 
+def build_word_to_line_map(blocks_by_id: dict) -> dict[str, str]:
+    """Map each WORD block ID to its parent LINE block ID."""
+    w2l: dict[str, str] = {}
+    for block in blocks_by_id.values():
+        if block.get("BlockType") != "LINE":
+            continue
+        for rel in block.get("Relationships", []):
+            if rel["Type"] == "CHILD":
+                for child_id in rel["Ids"]:
+                    w2l[child_id] = block["Id"]
+    return w2l
+
+
+def detect_is_landscape(blocks_by_id: dict) -> bool:
+    """
+    Receipt was photographed landscape (rotated 90°) when most LINE blocks are
+    taller than they are wide — each receipt row runs vertically in the image.
+    """
+    horiz = vert = 0
+    for block in blocks_by_id.values():
+        if block.get("BlockType") != "LINE":
+            continue
+        bb = block.get("Geometry", {}).get("BoundingBox", {})
+        w, h = bb.get("Width", 0), bb.get("Height", 0)
+        if w > h * 1.5:
+            horiz += 1
+        elif h > w * 1.5:
+            vert += 1
+    return vert > horiz
+
+
 def get_text(block_id: str, blocks_by_id: dict) -> str:
-    """Concatenate all WORD children of a block into a single string."""
+    """Concatenate WORD children of a block in Textract order."""
     block = blocks_by_id.get(block_id, {})
     parts = []
     for rel in block.get("Relationships", []):
@@ -107,54 +148,57 @@ def get_text(block_id: str, blocks_by_id: dict) -> str:
     return " ".join(parts)
 
 
-def get_cell_line_groups(cell_id: str, blocks_by_id: dict) -> list[str]:
+def get_cell_line_groups(
+    cell_id: str,
+    blocks_by_id: dict,
+    word_to_line: dict[str, str],
+    is_landscape: bool,
+) -> list[str]:
     """
-    Return the text of a CELL split into visual lines by clustering WORD children
-    on similar Top (Y) positions.
+    Return the text of each visual line within a CELL, in receipt reading order.
 
-    Words on the same printed line have Top values within ~0.003 of each other.
-    Adjacent receipt lines are ~0.007 apart. Splitting on gaps > 0.005 reliably
-    separates lines while keeping same-line words together.
+    Groups the cell's WORD children by parent LINE block, then sorts those lines by
+    the axis that matches receipt orientation:
+      - Portrait  (lines horizontal in image): ascending Top
+      - Landscape / 90° CW (lines vertical in image): descending Left
+        (receipt rows run right-to-left across the image for a CW-rotated receipt)
+
+    LINE.Text is used directly so Textract's own reading-order reconstruction handles
+    rotated text — reconstructing from WORD positions would reverse the words.
 
     Most cells return one element. Cells where Textract merged two adjacent receipt
-    rows (e.g. "REGAL SALMON SLICE 200G" immediately above "BROCCOLI" with no price)
-    return two elements, allowing expand_multiline_rows to re-separate them.
+    rows into one cell return two elements, triggering expand_multiline_rows to split.
     """
     cell = blocks_by_id.get(cell_id, {})
-    words: list[tuple[float, str]] = []
+
+    seen_lines: dict[str, None] = {}  # insertion-ordered set
     for rel in cell.get("Relationships", []):
         if rel["Type"] != "CHILD":
             continue
         for child_id in rel["Ids"]:
-            child = blocks_by_id.get(child_id, {})
-            if child.get("BlockType") != "WORD":
+            if blocks_by_id.get(child_id, {}).get("BlockType") != "WORD":
                 continue
-            top = child.get("Geometry", {}).get("BoundingBox", {}).get("Top", 0)
-            words.append((top, child.get("Text", "")))
+            line_id = word_to_line.get(child_id)
+            if line_id:
+                seen_lines[line_id] = None
 
-    if not words:
+    if not seen_lines:
         return [""]
 
-    words.sort(key=lambda w: w[0])
+    def sort_key(lid: str) -> float:
+        bb = blocks_by_id.get(lid, {}).get("Geometry", {}).get("BoundingBox", {})
+        # Descending Left for landscape CW: receipt-top rows are furthest right in image
+        return -bb.get("Left", 0) if is_landscape else bb.get("Top", 0)
 
-    LINE_GAP = 0.005
-    groups: list[list[str]] = [[]]
-    anchor = words[0][0]
-
-    for top, text in words:
-        if top - anchor > LINE_GAP:
-            groups.append([])
-            anchor = top
-        groups[-1].append(text)
-
-    return [" ".join(g) for g in groups if g]
+    result = [
+        blocks_by_id[lid].get("Text", "").strip()
+        for lid in sorted(seen_lines, key=sort_key)
+        if blocks_by_id.get(lid, {}).get("Text", "").strip()
+    ]
+    return result if result else [""]
 
 
 def extract_summary_fields(blocks_by_id: dict) -> tuple[str, str, str]:
-    """
-    Extract vendor, date, and total from KEY_VALUE_SET blocks (FORMS feature).
-    Falls back to scanning LINE blocks for a TOTAL pattern and topmost line for vendor.
-    """
     vendor = ""
     receipt_date = ""
     total = ""
@@ -203,12 +247,11 @@ def extract_summary_fields(blocks_by_id: dict) -> tuple[str, str, str]:
     return vendor, receipt_date, total
 
 
-def extract_line_items(blocks_by_id: dict) -> list:
-    """
-    Parse TABLE blocks. For each table, group CELLs into rows, split any cell whose
-    WORD children span multiple Y-position lines (merged-row detection), then
-    interpret columns as receipt item fields.
-    """
+def extract_line_items(
+    blocks_by_id: dict,
+    word_to_line: dict[str, str],
+    is_landscape: bool,
+) -> list:
     tables_cells: dict[str, dict[tuple[int, int], list[str]]] = {}
     table_col_counts: dict[str, int] = {}
 
@@ -228,7 +271,7 @@ def extract_line_items(blocks_by_id: dict) -> list:
                 row = cell.get("RowIndex", 0)
                 col = cell.get("ColumnIndex", 0)
                 span = cell.get("ColumnSpan", 1)
-                lines = get_cell_line_groups(cell_id, blocks_by_id)
+                lines = get_cell_line_groups(cell_id, blocks_by_id, word_to_line, is_landscape)
                 tables_cells[table_id][(row, col)] = lines
                 table_col_counts[table_id] = max(
                     table_col_counts[table_id], col + span - 1
@@ -241,11 +284,9 @@ def extract_line_items(blocks_by_id: dict) -> list:
         if not cells:
             continue
         num_cols = table_col_counts[table_id]
-
         rows: dict[int, dict[int, list[str]]] = {}
         for (row, col), lines in cells.items():
             rows.setdefault(row, {})[col] = lines
-
         expanded = expand_multiline_rows(rows, num_cols)
         all_items.extend(parse_table_rows(expanded, num_cols))
 
@@ -256,36 +297,23 @@ def expand_multiline_rows(
     rows: dict[int, dict[int, list[str]]], num_cols: int
 ) -> dict[int, dict[int, str]]:
     """
-    When the description cell (col 1) contains multiple Y-line groups, split it
-    into separate virtual rows. The first line keeps the row's price; additional
-    lines become description-only rows that reconcile_line_items will pair with
-    the following price-only row.
-
-    Example:
-      Textract cell: "REGAL SALMON SLICE 200G\nBROCCOLI"  price: "$23.69"
-      After expansion:
-        Row A: description="REGAL SALMON SLICE 200G"  price="$23.69"
-        Row B: description="BROCCOLI"                 price=""
+    When the description cell (col 1) contains multiple LINE groups, split the row
+    into virtual rows. The first line keeps the original row's price columns; extra
+    lines become orphan description-only rows for reconcile_line_items to pair.
     """
     result: dict[int, dict[int, str]] = {}
     virtual = 0
-
     for row_idx in sorted(rows.keys()):
         cols = rows[row_idx]
-
-        # First virtual row: take the first Y-line of each column
         result[virtual] = {
             col: (cols[col][0] if cols.get(col) else "")
             for col in range(1, num_cols + 1)
         }
         virtual += 1
-
-        # Extra lines from col 1 become orphan description-only rows
         for extra_desc in (cols.get(1) or [""])[1:]:
             result[virtual] = {col: "" for col in range(1, num_cols + 1)}
             result[virtual][1] = extra_desc
             virtual += 1
-
     return result
 
 
@@ -304,20 +332,30 @@ def parse_table_rows(rows: dict[int, dict[int, str]], num_cols: int) -> list:
 
 def interpret_row(values: list[str], num_cols: int) -> dict | None:
     """
-    Map column values to item fields. Skips rows where the last column contains
-    no digit (header rows, dividers).
+    Map column values to item fields.
+
+    Allows description-only rows through (no price/qty) so reconcile_line_items
+    can pair them with the following price-only row. Skips:
+      - Completely blank rows
+      - Known table-header descriptions (Item, Qty, Price …)
+      - Rows whose description matches footer/payment keywords
     """
-    if not values:
+    if not values or not any(v.strip() for v in values):
         return None
 
-    # Skip rows with no numeric value in any column (pure text header rows)
-    if not any(re.search(r"\d", v) for v in values):
+    desc = values[0].strip()
+
+    # Skip column header rows
+    if desc.upper() in HEADER_DESCS and not any(re.search(r"\d", v) for v in values):
+        return None
+
+    # Skip footer/payment rows
+    if FOOTER_RE.search(desc):
         return None
 
     item: dict[str, str] = {}
 
     if num_cols >= 4:
-        # description | quantity | unit_price | price
         if values[0]:
             item["description"] = values[0]
         if len(values) > 1 and values[1]:
@@ -327,7 +365,6 @@ def interpret_row(values: list[str], num_cols: int) -> dict | None:
         if len(values) > 3 and values[3]:
             item["price"] = values[3]
     elif num_cols == 3:
-        # description | qty×unit | price  — or  description | unit_price | price
         if values[0]:
             item["description"] = values[0]
         middle = values[1] if len(values) > 1 else ""
@@ -340,7 +377,6 @@ def interpret_row(values: list[str], num_cols: int) -> dict | None:
         if len(values) > 2 and values[2]:
             item["price"] = values[2]
     else:
-        # 2-column: description | price
         if values[0]:
             item["description"] = values[0]
         if len(values) > 1 and values[1]:
@@ -361,11 +397,10 @@ def parse_price(s: str) -> float | None:
 
 def reconcile_line_items(items: list) -> list:
     """
-    Two-pass clean-up for misaligned PAK'nSAVE line items:
+    Two-pass clean-up:
       Pass 1 — strip pricing where qty × unit_price ≠ price (column mis-assignment).
-      Pass 2 — pair orphan description-only rows with price-only rows in positional order.
+      Pass 2 — pair orphan description-only rows with price-only rows in order.
     """
-    # Pass 1 — strip mathematically inconsistent pricing
     for item in items:
         qty = parse_price(item.get("quantity"))
         unit = parse_price(item.get("unit_price"))
@@ -376,7 +411,6 @@ def reconcile_line_items(items: list) -> list:
                 item.pop("unit_price", None)
                 item.pop("price", None)
 
-    # Pass 2 — merge orphan price rows with unpriced description rows
     desc_only = [
         i for i, it in enumerate(items)
         if it.get("description", "").strip()
