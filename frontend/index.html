@@ -28,9 +28,9 @@
               <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
             </svg>
             <p class="drop-hint">Drop receipt images here</p>
-            <p class="drop-sub">JPEG or PNG, up to 5 MB each</p>
+            <p class="drop-sub" id="drop-sub">JPEG, PNG, or HEIC · up to 5 MB each</p>
             <label class="btn btn-primary" for="file-input">Choose files</label>
-            <input type="file" id="file-input" accept="image/jpeg,image/png" multiple style="display:none" />
+            <input type="file" id="file-input" accept="image/jpeg,image/png,image/heic,image/heif,.heic,.heif" multiple style="display:none" />
           </div>
         </div>
 
@@ -66,6 +66,7 @@
     </main>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
