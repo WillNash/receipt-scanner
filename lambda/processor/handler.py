@@ -33,13 +33,8 @@ QTY_RE = re.compile(
 HEADER_LINE_RE = re.compile(r"^item\b.*\bprice\b\s*$", re.IGNORECASE)
 HEADER_WORDS = {"ITEM", "DESCRIPTION", "PRODUCT", "ITEMS", "ITEM NAME", "QTY", "UNIT PRICE", "PRICE"}
 
-# Discount lines: "SAVING $0.58", "EVERYDAY SAVING $0.58", "DISC $0.58", "-$0.58"
-DISCOUNT_RE = re.compile(
-    r"(?:(?:EVERY\s*DAY|CLUB\s*CARD|MEMBER|PRICE\s*LOCK)\s+)?SAVING[S]?\s+\$?([\d,]+\.\d{2})"
-    r"|DISC(?:OUNT)?\s+\$?([\d,]+\.\d{2})"
-    r"|^\s*-\s*\$?\s*([\d,]+\.\d{2})\s*$",
-    re.IGNORECASE,
-)
+# Discount line: description column may prefix it, e.g. "BROCCOLI -$0.58"
+DISCOUNT_RE = re.compile(r"-\$?([\d,]+\.\d{2})\s*$")
 
 # Tolerance (in normalised image coordinates 0–1) for grouping column blocks on the same row
 ROW_TOLERANCE = 0.005
@@ -485,9 +480,7 @@ def parse_price(s: str) -> float | None:
 def parse_discount(text: str) -> str | None:
     """Return the discount amount string if the row is a discount line, else None."""
     m = DISCOUNT_RE.search(text)
-    if not m:
-        return None
-    return next((g for g in m.groups() if g), None)
+    return m.group(1) if m else None
 
 
 def reconcile_line_items(items: list) -> list:
