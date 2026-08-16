@@ -24,10 +24,13 @@ FOOTER_RE = re.compile(
 # Trailing price on a row: optional $ then digits.cents at end
 PRICE_TAIL_RE = re.compile(r"\s+\$?([\d,]+\.\d{2})\s*$")
 
-# Qty row: "2 @ $3.49" or "2 @ $3.49 $6.98" (second number may be total or savings display)
+# Qty row with @: "2 @ $3.49" or "2 @ $3.49 $6.98"
 QTY_RE = re.compile(
     r"^(\d+)\s*[@×xX]\s*\$?([\d.]+)(?:\s+\$?([\d,]+\.\d{2}))?\s*$"
 )
+
+# Qty row without @: OCR may drop the @ symbol, e.g. "20 $3.99 $7.98" (was "2 @ $3.99 $7.98")
+QTY_NO_AT_RE = re.compile(r"^(\d+)\s+\$?([\d.]+)\s+\$?([\d,]+\.\d{2})\s*$")
 
 # Column header rows — skip these
 HEADER_LINE_RE = re.compile(r"^item\b.*\bprice\b\s*$", re.IGNORECASE)
@@ -382,11 +385,28 @@ def extract_line_items(rows: list[str]) -> list[dict]:
                 items_finished = True
             continue
 
-        # ── Qty row: "N @ $UNIT" or "N @ $UNIT $TOTAL" ────────────────────────
+        # ── Qty row: "N @ $UNIT" or "N @ $UNIT $TOTAL", or no-@ OCR variant ───
         m = QTY_RE.match(text)
         if m:
             qty_str, unit_str, line_total = m.group(1), m.group(2), m.group(3)
+        else:
+            m = QTY_NO_AT_RE.match(text)
+            if m:
+                raw_qty, unit_str, line_total = m.group(1), m.group(2), m.group(3)
+                qty_str = raw_qty
+                try:
+                    u = float(unit_str)
+                    t = float(line_total.replace(",", ""))
+                    n = int(raw_qty)
+                    if abs(round(n * u, 2) - t) > 0.02:
+                        # OCR likely merged "2 @" into "20" — recover true qty
+                        q = round(t / u)
+                        if q > 0 and abs(round(q * u, 2) - t) <= 0.02:
+                            qty_str = str(q)
+                except (ValueError, TypeError):
+                    pass
 
+        if m:
             if not items_started:
                 # First real content row is a qty line — keep only the last
                 # accumulated desc (if any) as the product description, discard header
