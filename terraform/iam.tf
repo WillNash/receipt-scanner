@@ -47,10 +47,10 @@ resource "aws_iam_role_policy" "lambda_processor" {
         Resource = "${aws_s3_bucket.uploads.arn}/*"
       },
       {
-        # AnalyzeExpense does not support resource-level restrictions
-        Sid      = "TextractAnalyzeExpense"
+        # AnalyzeDocument does not support resource-level restrictions
+        Sid      = "TextractAnalyzeDocument"
         Effect   = "Allow"
-        Action   = "textract:AnalyzeExpense"
+        Action   = "textract:AnalyzeDocument"
         Resource = "*"
       },
       {

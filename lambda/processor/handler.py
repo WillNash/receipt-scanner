@@ -71,43 +71,16 @@ def process_record(record):
 
 
 def analyze_receipt(bucket: str, key: str) -> dict:
-    response = textract.analyze_expense(
-        Document={"S3Object": {"Bucket": bucket, "Name": key}}
+    response = textract.analyze_document(
+        Document={"S3Object": {"Bucket": bucket, "Name": key}},
+        FeatureTypes=["TABLES", "FORMS"],
     )
-    print("TEXTRACT_RAW_RESPONSE", json.dumps(response, default=str))
+    print("TEXTRACT_BLOCK_COUNT", len(response.get("Blocks", [])))
 
-    vendor = ""
-    receipt_date = ""
-    total = ""
-    items = []
+    blocks_by_id = {b["Id"]: b for b in response.get("Blocks", [])}
 
-    for doc in response.get("ExpenseDocuments", []):
-        for field in doc.get("SummaryFields", []):
-            field_type = field.get("Type", {}).get("Text", "")
-            value = field.get("ValueDetection", {}).get("Text", "")
-            if field_type == "VENDOR_NAME" and not vendor:
-                vendor = value
-            elif field_type == "INVOICE_RECEIPT_DATE" and not receipt_date:
-                receipt_date = value
-            elif field_type == "TOTAL" and not total:
-                total = value
-
-        for group in doc.get("LineItemGroups", []):
-            for line_item in group.get("LineItems", []):
-                item = {}
-                for expense_field in line_item.get("LineItemExpenseFields", []):
-                    field_type = expense_field.get("Type", {}).get("Text", "")
-                    value = expense_field.get("ValueDetection", {}).get("Text", "")
-                    if field_type == "ITEM":
-                        item["description"] = value
-                    elif field_type == "QUANTITY":
-                        item["quantity"] = value
-                    elif field_type == "UNIT_PRICE":
-                        item["unit_price"] = value
-                    elif field_type == "PRICE":
-                        item["price"] = value
-                if item:
-                    items.append(item)
+    vendor, receipt_date, total = extract_summary_fields(blocks_by_id)
+    items = extract_line_items(blocks_by_id)
 
     print("TEXTRACT_RAW_ITEMS", json.dumps(items))
     reconciled = reconcile_line_items(items)
@@ -119,6 +92,206 @@ def analyze_receipt(bucket: str, key: str) -> dict:
         "total": total or "",
         "items": reconciled,
     }
+
+
+def get_text(block_id: str, blocks_by_id: dict) -> str:
+    block = blocks_by_id.get(block_id, {})
+    if block.get("BlockType") == "WORD":
+        return block.get("Text", "")
+    if block.get("BlockType") == "SELECTION_ELEMENT":
+        return ""
+    # For LINE or CELL, concatenate children
+    parts = []
+    for rel in block.get("Relationships", []):
+        if rel["Type"] == "CHILD":
+            for child_id in rel["Ids"]:
+                child = blocks_by_id.get(child_id, {})
+                if child.get("BlockType") == "WORD":
+                    parts.append(child.get("Text", ""))
+    return " ".join(parts)
+
+
+def extract_summary_fields(blocks_by_id: dict) -> tuple[str, str, str]:
+    """
+    Extract vendor, date, and total from KEY_VALUE_SET blocks (FORMS feature).
+    Falls back to scanning LINE blocks for common receipt header patterns.
+    """
+    vendor = ""
+    receipt_date = ""
+    total = ""
+
+    # Collect key->value pairs from FORMS
+    kv_pairs = {}
+    for block in blocks_by_id.values():
+        if block.get("BlockType") != "KEY_VALUE_SET":
+            continue
+        if "KEY" not in block.get("EntityTypes", []):
+            continue
+        key_text = get_text(block["Id"], blocks_by_id).strip().upper()
+        for rel in block.get("Relationships", []):
+            if rel["Type"] == "VALUE":
+                for val_id in rel["Ids"]:
+                    val_text = get_text(val_id, blocks_by_id).strip()
+                    kv_pairs[key_text] = val_text
+
+    # Map common receipt key names
+    for key, val in kv_pairs.items():
+        if not vendor and any(k in key for k in ("VENDOR", "STORE", "MERCHANT", "SHOP")):
+            vendor = val
+        if not receipt_date and any(k in key for k in ("DATE", "TIME")):
+            receipt_date = val
+        if not total and any(k in key for k in ("TOTAL", "AMOUNT DUE", "BALANCE")):
+            total = val
+
+    # Fallback: scan LINE blocks for a TOTAL pattern (e.g. "TOTAL  $XX.XX")
+    if not total:
+        for block in sorted(blocks_by_id.values(), key=lambda b: b.get("Geometry", {}).get("BoundingBox", {}).get("Top", 0), reverse=True):
+            if block.get("BlockType") != "LINE":
+                continue
+            line = block.get("Text", "")
+            m = re.search(r"\bTOTAL\b.*?(\$?[\d,]+\.\d{2})", line, re.IGNORECASE)
+            if m:
+                total = m.group(1)
+                break
+
+    # Fallback: vendor is often the first LINE near the top
+    if not vendor:
+        lines = sorted(
+            [b for b in blocks_by_id.values() if b.get("BlockType") == "LINE"],
+            key=lambda b: b.get("Geometry", {}).get("BoundingBox", {}).get("Top", 1),
+        )
+        if lines:
+            vendor = lines[0].get("Text", "").strip()
+
+    return vendor, receipt_date, total
+
+
+def extract_line_items(blocks_by_id: dict) -> list:
+    """
+    Parse TABLE blocks from AnalyzeDocument. For each table, reconstruct rows
+    from CELL blocks and interpret columns as receipt line item fields.
+    Returns a flat list of item dicts with optional keys: description, quantity,
+    unit_price, price.
+    """
+    # Group cells by table block ID
+    tables: dict[str, dict] = {}  # table_id -> {(row, col): text}
+    table_col_counts: dict[str, int] = {}
+
+    for block in blocks_by_id.values():
+        if block.get("BlockType") != "TABLE":
+            continue
+        table_id = block["Id"]
+        tables[table_id] = {}
+        table_col_counts[table_id] = 0
+        for rel in block.get("Relationships", []):
+            if rel["Type"] == "CHILD":
+                for cell_id in rel["Ids"]:
+                    cell = blocks_by_id.get(cell_id, {})
+                    if cell.get("BlockType") != "CELL":
+                        continue
+                    row = cell.get("RowIndex", 0)
+                    col = cell.get("ColumnIndex", 0)
+                    span = cell.get("ColumnSpan", 1)
+                    text = get_text(cell_id, blocks_by_id).strip()
+                    tables[table_id][(row, col)] = text
+                    table_col_counts[table_id] = max(
+                        table_col_counts[table_id], col + span - 1
+                    )
+
+    print("TEXTRACT_TABLES_FOUND", len(tables))
+
+    all_items = []
+    for table_id, cells in tables.items():
+        if not cells:
+            continue
+        num_cols = table_col_counts[table_id]
+        # Group by row
+        rows: dict[int, dict[int, str]] = {}
+        for (row, col), text in cells.items():
+            rows.setdefault(row, {})[col] = text
+
+        items = parse_table_rows(rows, num_cols)
+        all_items.extend(items)
+
+    return all_items
+
+
+def parse_table_rows(rows: dict, num_cols: int) -> list:
+    """
+    Interpret table rows as receipt line items.
+
+    PAK'nSAVE receipts typically have 2–4 columns:
+      2 cols: description | price
+      3 cols: description | qty×unit | price
+      4 cols: description | qty | unit_price | price
+
+    We detect the layout from the column count and assign fields accordingly.
+    Rows that look like headers (all text, no numbers) are skipped.
+    """
+    items = []
+    sorted_rows = sorted(rows.keys())
+
+    for row_idx in sorted_rows:
+        cols = rows[row_idx]
+        # Build ordered list of cell values
+        values = [cols.get(c, "").strip() for c in range(1, num_cols + 1)]
+        if not any(values):
+            continue
+
+        item = interpret_row(values, num_cols)
+        if item:
+            items.append(item)
+
+    return items
+
+
+def interpret_row(values: list[str], num_cols: int) -> dict | None:
+    """
+    Map column values to item fields based on column count.
+    Returns None for header rows (no numeric price found in last column).
+    """
+    if not values:
+        return None
+
+    price_candidate = values[-1] if values else ""
+    # Skip rows where the last column has no recognisable price
+    if not re.search(r"\d", price_candidate):
+        return None
+
+    item = {}
+
+    if num_cols >= 4:
+        # description | quantity | unit_price | price
+        if values[0]:
+            item["description"] = values[0]
+        if len(values) > 1 and values[1]:
+            item["quantity"] = values[1]
+        if len(values) > 2 and values[2]:
+            item["unit_price"] = values[2]
+        if len(values) > 3 and values[3]:
+            item["price"] = values[3]
+    elif num_cols == 3:
+        # description | qty×unit_price | price  — or  description | unit_price | price
+        if values[0]:
+            item["description"] = values[0]
+        middle = values[1] if len(values) > 1 else ""
+        # "2 @ $6.99" or "2 x $6.99" — split into qty / unit_price
+        m = re.match(r"(\d+)\s*[@x×]\s*\$?([\d.]+)", middle, re.IGNORECASE)
+        if m:
+            item["quantity"] = m.group(1)
+            item["unit_price"] = m.group(2)
+        elif middle:
+            item["unit_price"] = middle
+        if len(values) > 2 and values[2]:
+            item["price"] = values[2]
+    else:
+        # 2-column: description | price
+        if values[0]:
+            item["description"] = values[0]
+        if len(values) > 1 and values[1]:
+            item["price"] = values[1]
+
+    return item if item else None
 
 
 def parse_price(s: str) -> float | None:
@@ -138,12 +311,12 @@ def reconcile_line_items(items: list) -> list:
       Multi-unit: ITEM_NAME
                   QTY  UNIT_PRICE  TOTAL (second line)
 
-    Textract AnalyzeExpense can mis-pair the second line with the wrong
-    description above it. Fix in two passes:
-      1. Strip pricing from items where qty * unit_price != price — these
-         are items that received another item's price row by mistake.
-      2. Merge consecutive (description-only, price-only) pairs — the
-         orphaned price row belongs to the description immediately above it.
+    AnalyzeDocument TABLES should preserve row boundaries correctly, so this
+    reconciliation is now a lighter-touch pass:
+      1. Strip pricing from items where qty * unit_price != price — misaligned
+         column assignment.
+      2. Merge consecutive (description-only, price-only) pairs — the second line
+         of a multi-unit item may land as a separate row with no description.
     """
     # Pass 1 — strip mathematically inconsistent pricing
     for item in items:
@@ -157,10 +330,6 @@ def reconcile_line_items(items: list) -> list:
                 item.pop("price", None)
 
     # Pass 2 — merge orphan price rows with unpriced description rows.
-    # They are not necessarily adjacent: Textract may order the second line of a
-    # multi-unit item well away from its description. Collect both sets globally,
-    # pair them in order of first appearance, and insert the merged item at the
-    # description's original position (preserving receipt order).
     desc_only = [
         i for i, it in enumerate(items)
         if it.get("description", "").strip()
@@ -172,9 +341,8 @@ def reconcile_line_items(items: list) -> list:
         and not it.get("description", "").strip()
     ]
 
-    # Pair description-only with price-only in positional order
-    merged_at = {}   # desc index -> merged item dict
-    skip = set()     # price-only indices to drop (merged into desc position)
+    merged_at = {}
+    skip = set()
     for desc_idx, price_idx in zip(desc_only, price_only):
         merged_at[desc_idx] = {**items[price_idx], "description": items[desc_idx]["description"]}
         skip.add(price_idx)
