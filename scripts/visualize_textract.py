@@ -151,7 +151,7 @@ def build_dot(data: dict) -> str:
 # ── HTML template ─────────────────────────────────────────────────────────────
 
 def build_html(dot_src: str, title: str, stats: str) -> str:
-    dot_json = json.dumps(dot_src)   # safely embeds the dot string as a JS string literal
+    dot_json = json.dumps(dot_src)
 
     legend_items = ""
     for bt, s in NODE_STYLE.items():
@@ -173,37 +173,54 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         background: #0f172a; color: #e2e8f0;
         height: 100vh; display: flex; flex-direction: column; overflow: hidden; }}
 
+/* ── toolbar ── */
 #toolbar {{ padding: 0.55rem 1rem; background: #1e293b;
             border-bottom: 1px solid #334155;
-            display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; flex-shrink: 0; }}
-#toolbar h1   {{ font-size: 0.9rem; font-weight: 700; color: #f1f5f9; white-space: nowrap; }}
-#stats        {{ font-size: 0.75rem; color: #94a3b8; white-space: nowrap; }}
+            display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; flex-shrink: 0; }}
+#toolbar h1 {{ font-size: 0.9rem; font-weight: 700; color: #f1f5f9; white-space: nowrap; }}
+#stats      {{ font-size: 0.75rem; color: #94a3b8; white-space: nowrap; }}
 
-.btn {{ padding: 0.28rem 0.7rem; border-radius: 4px; border: 1px solid #475569;
+.btn {{ padding: 0.28rem 0.65rem; border-radius: 4px; border: 1px solid #475569;
         background: #334155; color: #e2e8f0; cursor: pointer; font-size: 0.75rem;
-        transition: background 0.12s; white-space: nowrap; }}
+        transition: background 0.12s; white-space: nowrap; line-height: 1; }}
 .btn:hover  {{ background: #475569; }}
 .btn.active {{ background: #2563eb; border-color: #1d4ed8; }}
 
-#engine-group {{ display: flex; gap: 0.3rem; }}
+.btn-group {{ display: flex; gap: 0.25rem; align-items: center; }}
+.sep {{ width: 1px; height: 1.4rem; background: #475569; flex-shrink: 0; }}
 
-#legend {{ display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; font-size: 0.7rem; color: #cbd5e1; }}
+/* zoom buttons — square, larger font */
+#btn-zoomin, #btn-zoomout {{ font-size: 1rem; padding: 0.1rem 0.55rem; font-weight: 700; }}
+
+#zoom-label {{ font-size: 0.72rem; color: #94a3b8; min-width: 3.2rem; text-align: center; }}
+
+#legend {{ display: flex; gap: 0.45rem; flex-wrap: wrap; align-items: center;
+           font-size: 0.7rem; color: #cbd5e1; }}
 .leg-item {{ display: flex; align-items: center; gap: 0.25rem; }}
 .leg-box  {{ width: 12px; height: 12px; border-radius: 2px; border: 2px solid; flex-shrink: 0; }}
 
-#viewport {{ flex: 1; overflow: hidden; position: relative; cursor: grab; background: #f8fafc; }}
-#viewport.panning {{ cursor: grabbing; }}
-#svg-wrap  {{ position: absolute; top: 0; left: 0; transform-origin: 0 0; }}
+/* ── canvas area ── */
+#viewport {{ flex: 1; overflow: hidden; position: relative; background: #f8fafc; }}
+
+/* svg lives here, transformed for pan/zoom */
+#svg-wrap {{ position: absolute; top: 0; left: 0; transform-origin: 0 0; }}
 #svg-wrap svg {{ display: block; max-width: none; max-height: none; }}
 
-#status {{ position: absolute; inset: 0; display: flex; align-items: center;
-           justify-content: center; font-size: 1rem; color: #64748b; background: #f8fafc; }}
+/* transparent overlay — sits on top of the SVG and owns ALL mouse events for
+   pan/zoom so SVG child elements can never eat a drag or scroll */
+#overlay {{ position: absolute; inset: 0; z-index: 10; cursor: grab; }}
+#overlay.panning {{ cursor: grabbing; }}
 
+#status {{ position: absolute; inset: 0; display: flex; align-items: center;
+           justify-content: center; font-size: 1rem; color: #64748b;
+           background: #f8fafc; z-index: 20; }}
+
+/* ── tooltip ── */
 #tooltip {{ position: fixed; background: rgba(15,23,42,0.93); color: #e2e8f0;
             padding: 0.5rem 0.8rem; border-radius: 6px; font-size: 0.74rem;
             pointer-events: none; display: none; white-space: pre;
-            max-width: 380px; line-height: 1.55; z-index: 500;
-            border: 1px solid #334155; box-shadow: 0 4px 18px rgba(0,0,0,0.55); }}
+            max-width: 400px; line-height: 1.6; z-index: 500;
+            border: 1px solid #334155; box-shadow: 0 4px 18px rgba(0,0,0,0.6); }}
 </style>
 </head>
 <body>
@@ -211,19 +228,35 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 <div id="toolbar">
   <h1>Textract Block Graph</h1>
   <span id="stats">{stats}</span>
-  <div id="engine-group">
-    <button class="btn active" onclick="render('dot')"    id="btn-dot">dot</button>
-    <button class="btn"        onclick="render('fdp')"    id="btn-fdp">fdp</button>
-    <button class="btn"        onclick="render('sfdp')"   id="btn-sfdp">sfdp</button>
-    <button class="btn"        onclick="render('neato')"  id="btn-neato">neato</button>
-    <button class="btn"        onclick="render('circo')"  id="btn-circo">circo</button>
+
+  <div class="sep"></div>
+
+  <!-- engine selector -->
+  <div class="btn-group">
+    <button class="btn active" onclick="render('dot')"   id="btn-dot">dot</button>
+    <button class="btn"        onclick="render('fdp')"   id="btn-fdp">fdp</button>
+    <button class="btn"        onclick="render('sfdp')"  id="btn-sfdp">sfdp</button>
+    <button class="btn"        onclick="render('neato')" id="btn-neato">neato</button>
+    <button class="btn"        onclick="render('circo')" id="btn-circo">circo</button>
   </div>
-  <button class="btn" onclick="resetView()">Reset view</button>
+
+  <div class="sep"></div>
+
+  <!-- zoom controls -->
+  <div class="btn-group">
+    <button class="btn" id="btn-zoomout" onclick="zoomStep(1/1.3)" title="Zoom out (-)">−</button>
+    <span id="zoom-label">100%</span>
+    <button class="btn" id="btn-zoomin"  onclick="zoomStep(1.3)"   title="Zoom in (+)">+</button>
+  </div>
+  <button class="btn" onclick="resetView()">Fit</button>
+
+  <div class="sep"></div>
   <div id="legend">{legend_items}</div>
 </div>
 
 <div id="viewport">
   <div id="svg-wrap"></div>
+  <div id="overlay"></div>
   <div id="status">Rendering graph…</div>
 </div>
 <div id="tooltip"></div>
@@ -231,9 +264,8 @@ body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 <script>
 const DOT_SRC = {dot_json};
 
-// ── Viz.js rendering ─────────────────────────────────────────────────────────
+// ── Viz.js ────────────────────────────────────────────────────────────────────
 let vizInstance = null;
-let currentEngine = 'dot';
 
 Viz.instance().then(v => {{
   vizInstance = v;
@@ -244,18 +276,13 @@ Viz.instance().then(v => {{
 
 function render(engine) {{
   if (!vizInstance) return;
-  currentEngine = engine;
-
-  // Update button states
-  ['dot','fdp','sfdp','neato','circo'].forEach(e => {{
-    document.getElementById('btn-' + e).classList.toggle('active', e === engine);
-  }});
+  ['dot','fdp','sfdp','neato','circo'].forEach(e =>
+    document.getElementById('btn-' + e).classList.toggle('active', e === engine));
 
   const status = document.getElementById('status');
   status.textContent = `Rendering with ${{engine}}…`;
   status.style.display = 'flex';
 
-  // yield to browser so status message paints before the (blocking) render
   setTimeout(() => {{
     try {{
       const svg = vizInstance.renderSVGElement(DOT_SRC, {{ engine }});
@@ -264,7 +291,6 @@ function render(engine) {{
       wrap.appendChild(svg);
       status.style.display = 'none';
       resetView();
-      attachTooltips();
     }} catch (err) {{
       status.textContent = 'Render error: ' + err.message;
     }}
@@ -274,77 +300,108 @@ function render(engine) {{
 // ── Pan / zoom ────────────────────────────────────────────────────────────────
 let tx = 0, ty = 0, scale = 1;
 
+function applyTransform() {{
+  document.getElementById('svg-wrap').style.transform =
+    `translate(${{tx}}px,${{ty}}px) scale(${{scale}})`;
+  document.getElementById('zoom-label').textContent =
+    Math.round(scale * 100) + '%';
+}}
+
+function zoomAround(factor, cx, cy) {{
+  tx    = cx - (cx - tx) * factor;
+  ty    = cy - (cy - ty) * factor;
+  scale = scale * factor;
+  applyTransform();
+}}
+
+function zoomStep(factor) {{
+  const vp   = document.getElementById('viewport');
+  const rect = vp.getBoundingClientRect();
+  zoomAround(factor, rect.width / 2, rect.height / 2);
+}}
+
 function resetView() {{
   const vp  = document.getElementById('viewport');
   const svg = document.querySelector('#svg-wrap svg');
   if (!svg) return;
-
-  const svgW  = svg.viewBox.baseVal.width  || svg.width.baseVal.value  || 800;
-  const svgH  = svg.viewBox.baseVal.height || svg.height.baseVal.value || 600;
-  const vpW   = vp.clientWidth;
-  const vpH   = vp.clientHeight;
-  scale = Math.min(vpW / svgW, vpH / svgH) * 0.95;
-  tx    = (vpW - svgW * scale) / 2;
-  ty    = (vpH - svgH * scale) / 2;
+  const svgW = svg.viewBox.baseVal.width  || svg.width.baseVal.value  || 800;
+  const svgH = svg.viewBox.baseVal.height || svg.height.baseVal.value || 600;
+  scale = Math.min(vp.clientWidth / svgW, vp.clientHeight / svgH) * 0.95;
+  tx    = (vp.clientWidth  - svgW * scale) / 2;
+  ty    = (vp.clientHeight - svgH * scale) / 2;
   applyTransform();
 }}
 
-function applyTransform() {{
-  document.getElementById('svg-wrap').style.transform =
-    `translate(${{tx}}px, ${{ty}}px) scale(${{scale}})`;
-}}
+// keyboard shortcuts
+window.addEventListener('keydown', e => {{
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === '+' || e.key === '=') zoomStep(1.3);
+  if (e.key === '-' || e.key === '_') zoomStep(1/1.3);
+  if (e.key === '0')                  resetView();
+}});
 
-const vp = document.getElementById('viewport');
+// ── Overlay: owns all pan + zoom events ──────────────────────────────────────
+const overlay = document.getElementById('overlay');
 
-vp.addEventListener('wheel', e => {{
+// scroll-wheel zoom — zooms toward the cursor position
+overlay.addEventListener('wheel', e => {{
   e.preventDefault();
+  const rect   = overlay.getBoundingClientRect();
   const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-  const rect = vp.getBoundingClientRect();
-  const mx = e.clientX - rect.left;
-  const my = e.clientY - rect.top;
-  tx = mx - (mx - tx) * factor;
-  ty = my - (my - ty) * factor;
-  scale *= factor;
-  applyTransform();
+  zoomAround(factor, e.clientX - rect.left, e.clientY - rect.top);
 }}, {{ passive: false }});
 
+// drag to pan
 let drag = null;
-vp.addEventListener('mousedown', e => {{
+overlay.addEventListener('mousedown', e => {{
   if (e.button !== 0) return;
-  drag = {{ sx: e.clientX - tx, sy: e.clientY - ty }};
-  vp.classList.add('panning');
+  e.preventDefault();
+  drag = {{ ox: e.clientX - tx, oy: e.clientY - ty }};
+  overlay.classList.add('panning');
 }});
 window.addEventListener('mousemove', e => {{
   if (!drag) return;
-  tx = e.clientX - drag.sx;
-  ty = e.clientY - drag.sy;
+  tx = e.clientX - drag.ox;
+  ty = e.clientY - drag.oy;
   applyTransform();
+  // while dragging, also update tooltip position but don't re-probe
+  positionTooltip(e.clientX, e.clientY);
 }});
-window.addEventListener('mouseup', () => {{ drag = null; vp.classList.remove('panning'); }});
+window.addEventListener('mouseup', () => {{
+  drag = null;
+  overlay.classList.remove('panning');
+}});
 
-// ── Tooltips from SVG title elements ─────────────────────────────────────────
+// ── Tooltip — probe through overlay to find SVG node under cursor ─────────────
 const tip = document.getElementById('tooltip');
 
-function attachTooltips() {{
-  document.querySelectorAll('#svg-wrap g[id^="node"] title').forEach(titleEl => {{
-    const parent = titleEl.closest('g');
-    if (!parent) return;
-    parent.addEventListener('mouseenter', () => {{
-      tip.textContent = titleEl.textContent;
-      tip.style.display = 'block';
-    }});
-    parent.addEventListener('mouseleave', () => {{ tip.style.display = 'none'; }});
-  }});
-}}
+overlay.addEventListener('mousemove', e => {{
+  if (drag) return;   // don't flicker during pan
+  // temporarily disable overlay so elementsFromPoint sees the SVG behind it
+  overlay.style.pointerEvents = 'none';
+  const els = document.elementsFromPoint(e.clientX, e.clientY);
+  overlay.style.pointerEvents = '';
 
-document.addEventListener('mousemove', e => {{
-  if (tip.style.display === 'block') {{
-    const ow = tip.offsetWidth, oh = tip.offsetHeight;
-    const x = e.clientX + 14, y = e.clientY + 14;
-    tip.style.left = (x + ow > window.innerWidth  ? x - ow - 20 : x) + 'px';
-    tip.style.top  = (y + oh > window.innerHeight ? y - oh - 20 : y) + 'px';
+  const nodeG = els.find(el => el.closest?.('g[id^="node"]'))?.closest('g[id^="node"]');
+  if (nodeG) {{
+    const title = nodeG.querySelector(':scope > title');
+    if (title) {{
+      tip.textContent = title.textContent;
+      tip.style.display = 'block';
+      positionTooltip(e.clientX, e.clientY);
+      return;
+    }}
   }}
+  tip.style.display = 'none';
 }});
+overlay.addEventListener('mouseleave', () => {{ tip.style.display = 'none'; }});
+
+function positionTooltip(cx, cy) {{
+  if (tip.style.display !== 'block') return;
+  const ow = tip.offsetWidth, oh = tip.offsetHeight;
+  tip.style.left = (cx + 14 + ow > window.innerWidth  ? cx - ow - 14 : cx + 14) + 'px';
+  tip.style.top  = (cy + 14 + oh > window.innerHeight ? cy - oh - 14 : cy + 14) + 'px';
+}}
 </script>
 </body>
 </html>"""
