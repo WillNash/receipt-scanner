@@ -24,9 +24,9 @@ FOOTER_RE = re.compile(
 # Trailing price on a row: optional $ then digits.cents at end
 PRICE_TAIL_RE = re.compile(r"\s+\$?([\d,]+\.\d{2})\s*$")
 
-# Qty row with @: "2 @ $3.49" or "2 @ $3.49 $6.98"
+# Qty row with @: "2 @ $3.49 $6.98" or "1.976 Kg @ $1.99/Kg $3.93"
 QTY_RE = re.compile(
-    r"^(\d+)\s*[@×xX]\s*\$?([\d.]+)(?:\s+\$?([\d,]+\.\d{2}))?\s*$"
+    r"^([\d.]+)\s*(?:Kg\s*)?[@×xX]\s*\$?([\d.]+)(?:/Kg)?(?:\s+\$?([\d,]+\.\d{2}))?\s*$"
 )
 
 # Qty row without @: OCR may drop the @ symbol, e.g. "20 $3.99 $7.98" (was "2 @ $3.99 $7.98")
