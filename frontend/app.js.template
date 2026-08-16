@@ -290,11 +290,12 @@ function buildReceiptCard(job) {
   card.className = "receipt-card";
 
   const items = Array.isArray(job.items) ? job.items : [];
+  const hasDiscount = items.some(it => it.discount);
   const itemsHtml = items.length ? `
     <table class="items-table">
       <thead>
         <tr>
-          <th>Item</th><th>Qty</th><th>Unit price</th><th>Price</th>
+          <th>Item</th><th>Qty</th><th>Unit price</th>${hasDiscount ? "<th>Discount</th>" : ""}<th>Price</th>
         </tr>
       </thead>
       <tbody>
@@ -303,6 +304,7 @@ function buildReceiptCard(job) {
             <td>${escapeHtml(it.description)}</td>
             <td>${escapeHtml(it.quantity)}</td>
             <td>${escapeHtml(it.unit_price)}</td>
+            ${hasDiscount ? `<td>${it.discount ? "-$" + escapeHtml(it.discount) : ""}</td>` : ""}
             <td>${escapeHtml(it.price)}</td>
           </tr>`).join("")}
       </tbody>

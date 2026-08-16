@@ -33,6 +33,14 @@ QTY_RE = re.compile(
 HEADER_LINE_RE = re.compile(r"^item\b.*\bprice\b\s*$", re.IGNORECASE)
 HEADER_WORDS = {"ITEM", "DESCRIPTION", "PRODUCT", "ITEMS", "ITEM NAME", "QTY", "UNIT PRICE", "PRICE"}
 
+# Discount lines: "SAVING $0.58", "EVERYDAY SAVING $0.58", "DISC $0.58", "-$0.58"
+DISCOUNT_RE = re.compile(
+    r"(?:(?:EVERY\s*DAY|CLUB\s*CARD|MEMBER|PRICE\s*LOCK)\s+)?SAVING[S]?\s+\$?([\d,]+\.\d{2})"
+    r"|DISC(?:OUNT)?\s+\$?([\d,]+\.\d{2})"
+    r"|^\s*-\s*\$?\s*([\d,]+\.\d{2})\s*$",
+    re.IGNORECASE,
+)
+
 # Tolerance (in normalised image coordinates 0–1) for grouping column blocks on the same row
 ROW_TOLERANCE = 0.005
 
@@ -327,6 +335,7 @@ def extract_line_items(rows: list[str]) -> list[dict]:
     pending_price: str | None = None
     items_started = False
     items_finished = False
+    expecting_discount = False  # True immediately after flushing a multi-unit item
 
     def flush(qty=None, unit=None, override_total=None):
         nonlocal desc_acc, pending_price
@@ -347,11 +356,28 @@ def extract_line_items(rows: list[str]) -> list[dict]:
     for row in rows:
         text = row.strip()
         if not text or items_finished:
+            expecting_discount = False
             continue
 
         # Skip column header rows (e.g., "Item  Qty  Unit price  Price")
         if text.upper() in HEADER_WORDS or HEADER_LINE_RE.match(text):
             continue
+
+        # ── Discount row: appears immediately after a multi-unit qty row ────────
+        if expecting_discount:
+            expecting_discount = False
+            discount_val = parse_discount(text)
+            if discount_val is not None and items:
+                last = items[-1]
+                try:
+                    disc_f = float(discount_val.replace(",", ""))
+                    price_f = float(last.get("price", "0").replace(",", ""))
+                    last["discount"] = f"{disc_f:.2f}"
+                    last["price"] = f"{round(price_f - disc_f, 2):.2f}"
+                except (ValueError, TypeError):
+                    pass
+                continue
+            # Not a discount line — fall through to normal processing
 
         # Footer/payment rows: flush pending item.
         # A footer row that carries a price marks the end of the items section.
@@ -387,6 +413,11 @@ def extract_line_items(rows: list[str]) -> list[dict]:
             if belongs:
                 # pending_price is the printed item total; line_total may be a savings display
                 flush(qty=qty_str, unit=unit_str, override_total=pending_price or line_total)
+                try:
+                    if int(qty_str) > 1:
+                        expecting_discount = True
+                except (ValueError, TypeError):
+                    pass
             else:
                 # Flush previous item, then emit this as a description-less qty item
                 flush()
@@ -399,6 +430,11 @@ def extract_line_items(rows: list[str]) -> list[dict]:
                 ) or calc_total
                 if orphan_price:
                     items.append({"quantity": qty_str, "unit_price": unit_str, "price": orphan_price})
+                    try:
+                        if int(qty_str) > 1:
+                            expecting_discount = True
+                    except (ValueError, TypeError):
+                        pass
             continue
 
         # ── Row ending with a price ────────────────────────────────────────────
@@ -446,6 +482,14 @@ def parse_price(s: str) -> float | None:
         return None
 
 
+def parse_discount(text: str) -> str | None:
+    """Return the discount amount string if the row is a discount line, else None."""
+    m = DISCOUNT_RE.search(text)
+    if not m:
+        return None
+    return next((g for g in m.groups() if g), None)
+
+
 def reconcile_line_items(items: list) -> list:
     """
     Second-pass clean-up: pair orphan description-only rows with price-only rows.
@@ -455,8 +499,9 @@ def reconcile_line_items(items: list) -> list:
         qty = parse_price(item.get("quantity"))
         unit = parse_price(item.get("unit_price"))
         price = parse_price(item.get("price"))
+        discount = parse_price(item.get("discount")) or 0.0
         if qty is not None and unit is not None and price is not None:
-            if abs(round(qty * unit, 2) - price) > 0.02:
+            if abs(round(qty * unit - discount, 2) - price) > 0.02:
                 item.pop("quantity", None)
                 item.pop("unit_price", None)
 
@@ -535,9 +580,10 @@ def write_line_items(
             "expires_at":    {"N": str(expires_at)},
         }
 
-        qty_n    = to_n(item.get("quantity"))
-        unit_n   = to_n(item.get("unit_price"))
-        price_n  = to_n(item.get("price"))
+        qty_n      = to_n(item.get("quantity"))
+        unit_n     = to_n(item.get("unit_price"))
+        price_n    = to_n(item.get("price"))
+        discount_n = to_n(item.get("discount"))
 
         if qty_n:
             record["quantity"] = qty_n
@@ -545,6 +591,8 @@ def write_line_items(
             record["unit_price"] = unit_n
         if price_n:
             record["price"] = price_n
+        if discount_n:
+            record["discount"] = discount_n
 
         dynamodb.put_item(TableName=LINE_ITEMS_TABLE, Item=record)
         print(f"LINE_ITEM_WRITTEN {job_id}#{i:03d} {description!r}")
