@@ -65,6 +65,12 @@ resource "aws_iam_role_policy" "lambda_processor" {
         Action = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem"]
         Resource = aws_dynamodb_table.jobs.arn
       },
+      {
+        Sid    = "LineItemsWrite"
+        Effect = "Allow"
+        Action = "dynamodb:PutItem"
+        Resource = aws_dynamodb_table.line_items.arn
+      },
     ]
   })
 }

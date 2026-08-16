@@ -7,6 +7,7 @@ from urllib.parse import unquote_plus
 import boto3
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
+LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
 S3_BUCKET = os.environ["S3_UPLOADS_BUCKET"]
 PRIMARY_REGION = os.environ.get("PRIMARY_REGION", "ap-southeast-2")
 
@@ -64,9 +65,13 @@ def process_record(record):
             TableName=DYNAMODB_TABLE,
             Key={"job_id": {"S": job_id}},
         )
-        if existing.get("Item", {}).get("status", {}).get("S") == "COMPLETE":
+        existing_item = existing.get("Item", {})
+        if existing_item.get("status", {}).get("S") == "COMPLETE":
             print(f"Job {job_id} already COMPLETE — skipping Textract call")
             continue
+
+        user_id = existing_item.get("user_id", {}).get("S", "unknown")
+        created_at = existing_item.get("created_at", {}).get("S", now_iso())
 
         update_job(job_id, {
             "status": {"S": "PROCESSING"},
@@ -86,6 +91,17 @@ def process_record(record):
             "updated_at": {"S": now_iso()},
             "expires_at": {"N": str(expiry)},
         })
+
+        if LINE_ITEMS_TABLE:
+            write_line_items(
+                job_id=job_id,
+                user_id=user_id,
+                created_at=created_at,
+                vendor=result["vendor"],
+                receipt_date=result["receipt_date"],
+                items=result["items"],
+                expires_at=expiry,
+            )
 
 
 def save_debug(job_id: str, payload: dict) -> str:
@@ -317,10 +333,8 @@ def extract_line_items(rows: list[str]) -> list[dict]:
         item: dict = {}
         if desc:
             item["description"] = desc
-        if qty:
-            item["quantity"] = qty
-        if unit:
-            item["unit_price"] = unit
+        item["quantity"] = qty or "1"
+        item["unit_price"] = unit or resolved_total or ""
         if resolved_total:
             item["price"] = resolved_total
         if item.get("description") or item.get("price"):
@@ -474,6 +488,62 @@ def reconcile_line_items(items: list) -> list:
             result.append(item)
 
     return result
+
+
+def write_line_items(
+    job_id: str,
+    user_id: str,
+    created_at: str,
+    vendor: str,
+    receipt_date: str,
+    items: list,
+    expires_at: int,
+) -> None:
+    """Write one DynamoDB record per line item to the line_items table.
+
+    item_sk      = "{created_at}#{job_id}#{NNN}"  — range key, sorts by date
+    desc_created = "{description}#{created_at}"   — GSI SK for per-item date queries
+    """
+    for i, item in enumerate(items):
+        description = item.get("description", "").strip()
+        if not description:
+            continue
+
+        item_sk = f"{created_at}#{job_id}#{i:03d}"
+        desc_created = f"{description}#{created_at}"
+
+        def to_n(val):
+            """Convert a price/qty string to a numeric DynamoDB N value."""
+            try:
+                return {"N": str(float(str(val).replace(",", "")))}
+            except (ValueError, TypeError):
+                return None
+
+        record: dict = {
+            "user_id":       {"S": user_id},
+            "item_sk":       {"S": item_sk},
+            "job_id":        {"S": job_id},
+            "description":   {"S": description},
+            "desc_created":  {"S": desc_created},
+            "vendor":        {"S": vendor},
+            "receipt_date":  {"S": receipt_date},
+            "created_at":    {"S": created_at},
+            "expires_at":    {"N": str(expires_at)},
+        }
+
+        qty_n    = to_n(item.get("quantity"))
+        unit_n   = to_n(item.get("unit_price"))
+        price_n  = to_n(item.get("price"))
+
+        if qty_n:
+            record["quantity"] = qty_n
+        if unit_n:
+            record["unit_price"] = unit_n
+        if price_n:
+            record["price"] = price_n
+
+        dynamodb.put_item(TableName=LINE_ITEMS_TABLE, Item=record)
+        print(f"LINE_ITEM_WRITTEN {job_id}#{i:03d} {description!r}")
 
 
 def update_job(job_id: str, fields: dict) -> None:
