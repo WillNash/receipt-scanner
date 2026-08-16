@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote_plus
 
@@ -111,8 +112,66 @@ def analyze_receipt(bucket: str, key: str) -> dict:
         "vendor": vendor or "Unknown vendor",
         "receipt_date": receipt_date or "",
         "total": total or "",
-        "items": items,
+        "items": reconcile_line_items(items),
     }
+
+
+def parse_price(s: str) -> float | None:
+    if not s:
+        return None
+    cleaned = re.sub(r"[^\d.]", "", str(s))
+    try:
+        return float(cleaned) if cleaned else None
+    except ValueError:
+        return None
+
+
+def reconcile_line_items(items: list) -> list:
+    """
+    PAK'nSAVE-style receipts mix two formats on the same receipt:
+      Single:     ITEM_NAME       PRICE
+      Multi-unit: ITEM_NAME
+                  QTY  UNIT_PRICE  TOTAL (second line)
+
+    Textract AnalyzeExpense can mis-pair the second line with the wrong
+    description above it. Fix in two passes:
+      1. Strip pricing from items where qty * unit_price != price — these
+         are items that received another item's price row by mistake.
+      2. Merge consecutive (description-only, price-only) pairs — the
+         orphaned price row belongs to the description immediately above it.
+    """
+    # Pass 1 — strip mathematically inconsistent pricing
+    for item in items:
+        qty = parse_price(item.get("quantity"))
+        unit = parse_price(item.get("unit_price"))
+        price = parse_price(item.get("price"))
+        if qty is not None and unit is not None and price is not None:
+            if abs(round(qty * unit, 2) - price) > 0.02:
+                item.pop("quantity", None)
+                item.pop("unit_price", None)
+                item.pop("price", None)
+
+    # Pass 2 — merge orphan price rows into the preceding description-only row
+    result = []
+    i = 0
+    while i < len(items):
+        item = items[i]
+        has_desc = bool(item.get("description", "").strip())
+        has_pricing = bool(item.get("price") or item.get("unit_price") or item.get("quantity"))
+
+        if has_desc and not has_pricing and i + 1 < len(items):
+            nxt = items[i + 1]
+            if (bool(nxt.get("price") or nxt.get("unit_price") or nxt.get("quantity"))
+                    and not bool(nxt.get("description", "").strip())):
+                result.append({**nxt, "description": item["description"]})
+                i += 2
+                continue
+
+        if has_desc or has_pricing:
+            result.append(item)
+        i += 1
+
+    return result
 
 
 def update_job(job_id: str, fields: dict) -> None:
