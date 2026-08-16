@@ -40,6 +40,16 @@ def process_record(record):
         parts = key.split("/")
         job_id = parts[2].rsplit(".", 1)[0] if len(parts) >= 3 else key
 
+        # Idempotency guard: SQS delivers at-least-once, so the same message can
+        # arrive after a successful run. Skip Textract entirely if already done.
+        existing = dynamodb.get_item(
+            TableName=DYNAMODB_TABLE,
+            Key={"job_id": {"S": job_id}},
+        )
+        if existing.get("Item", {}).get("status", {}).get("S") == "COMPLETE":
+            print(f"Job {job_id} already COMPLETE — skipping Textract call")
+            continue
+
         update_job(job_id, {
             "status": {"S": "PROCESSING"},
             "updated_at": {"S": now_iso()},
