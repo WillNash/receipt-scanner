@@ -1,3 +1,30 @@
+resource "aws_dynamodb_table" "image_hashes" {
+  name         = "${var.project_name}-image-hashes"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "user_id"
+  range_key    = "image_hash"
+
+  attribute {
+    name = "user_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "image_hash"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
+  tags = {
+    Project     = var.project_name
+    Environment = var.environment
+  }
+}
+
 resource "aws_dynamodb_table" "line_items" {
   name         = "${var.project_name}-line-items"
   billing_mode = "PAY_PER_REQUEST"

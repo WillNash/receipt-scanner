@@ -71,6 +71,12 @@ resource "aws_iam_role_policy" "lambda_processor" {
         Action = "dynamodb:PutItem"
         Resource = aws_dynamodb_table.line_items.arn
       },
+      {
+        Sid    = "ImageHashesReadWrite"
+        Effect = "Allow"
+        Action = ["dynamodb:GetItem", "dynamodb:PutItem"]
+        Resource = aws_dynamodb_table.image_hashes.arn
+      },
     ]
   })
 }

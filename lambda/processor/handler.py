@@ -1,4 +1,4 @@
-import io
+import hashlib
 import json
 import os
 import re
@@ -11,6 +11,7 @@ import numpy as np
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
 LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
+IMAGE_HASHES_TABLE = os.environ.get("IMAGE_HASHES_TABLE", "")
 S3_BUCKET = os.environ["S3_UPLOADS_BUCKET"]
 PRIMARY_REGION = os.environ.get("PRIMARY_REGION", "ap-southeast-2")
 
@@ -97,7 +98,31 @@ def process_record(record):
             "updated_at": {"S": now_iso()},
         })
 
-        result = analyze_receipt(bucket, key, job_id)
+        # Download image once; hash before cropping so the hash is stable
+        # regardless of crop outcome.
+        image_data = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+        image_hash = hashlib.sha256(image_data).hexdigest()
+
+        prior_job_id = lookup_image_hash(user_id, image_hash)
+        if prior_job_id:
+            result = copy_job_result(prior_job_id, job_id, image_hash)
+            if result:
+                print(f"DUPLICATE image_hash={image_hash[:12]}… reusing job {prior_job_id}")
+                expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
+                update_job(job_id, {
+                    "status": {"S": "COMPLETE"},
+                    "vendor": {"S": result["vendor"]},
+                    "receipt_date": {"S": result["receipt_date"]},
+                    "total": {"S": result["total"]},
+                    "items": {"S": json.dumps(result["items"])},
+                    "debug_s3_key": {"S": result["debug_s3_key"]},
+                    "image_hash": {"S": image_hash},
+                    "updated_at": {"S": now_iso()},
+                    "expires_at": {"N": str(expiry)},
+                })
+                continue
+
+        result = analyze_receipt(bucket, key, job_id, image_data=image_data)
 
         expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
         update_job(job_id, {
@@ -107,9 +132,12 @@ def process_record(record):
             "total": {"S": result["total"]},
             "items": {"S": json.dumps(result["items"])},
             "debug_s3_key": {"S": result["debug_s3_key"]},
+            "image_hash": {"S": image_hash},
             "updated_at": {"S": now_iso()},
             "expires_at": {"N": str(expiry)},
         })
+
+        store_image_hash(user_id, image_hash, job_id, expiry)
 
         if LINE_ITEMS_TABLE:
             write_line_items(
@@ -135,7 +163,7 @@ def save_debug(job_id: str, payload: dict) -> str:
     return debug_key
 
 
-def crop_receipt(bucket: str, key: str) -> None:
+def crop_receipt(bucket: str, key: str, image_data: bytes | None = None) -> None:
     """
     Detect the receipt strip using MSER text-density and crop to it.
 
@@ -160,7 +188,7 @@ def crop_receipt(bucket: str, key: str) -> None:
     MIN_GAIN = 0.85        # skip if crop keeps ≥85 % of original pixels
 
     try:
-        data = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+        data = image_data if image_data is not None else s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         arr = np.frombuffer(data, dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img is None:
@@ -243,8 +271,49 @@ def crop_receipt(bucket: str, key: str) -> None:
         print(f"CROP_SKIPPED: {exc}")
 
 
-def analyze_receipt(bucket: str, key: str, job_id: str) -> dict:
-    crop_receipt(bucket, key)
+def lookup_image_hash(user_id: str, image_hash: str) -> str | None:
+    if not IMAGE_HASHES_TABLE:
+        return None
+    resp = dynamodb.get_item(
+        TableName=IMAGE_HASHES_TABLE,
+        Key={"user_id": {"S": user_id}, "image_hash": {"S": image_hash}},
+    )
+    return resp.get("Item", {}).get("job_id", {}).get("S")
+
+
+def store_image_hash(user_id: str, image_hash: str, job_id: str, expires_at: int) -> None:
+    if not IMAGE_HASHES_TABLE:
+        return
+    dynamodb.put_item(
+        TableName=IMAGE_HASHES_TABLE,
+        Item={
+            "user_id":    {"S": user_id},
+            "image_hash": {"S": image_hash},
+            "job_id":     {"S": job_id},
+            "expires_at": {"N": str(expires_at)},
+        },
+    )
+
+
+def copy_job_result(src_job_id: str, dst_job_id: str, image_hash: str) -> dict | None:
+    resp = dynamodb.get_item(
+        TableName=DYNAMODB_TABLE,
+        Key={"job_id": {"S": src_job_id}},
+    )
+    item = resp.get("Item", {})
+    if item.get("status", {}).get("S") != "COMPLETE":
+        return None
+    return {
+        "vendor":       item.get("vendor", {}).get("S", ""),
+        "receipt_date": item.get("receipt_date", {}).get("S", ""),
+        "total":        item.get("total", {}).get("S", ""),
+        "items":        json.loads(item.get("items", {}).get("S", "[]")),
+        "debug_s3_key": item.get("debug_s3_key", {}).get("S", ""),
+    }
+
+
+def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None = None) -> dict:
+    crop_receipt(bucket, key, image_data=image_data)
     response = textract.analyze_document(
         Document={"S3Object": {"Bucket": bucket, "Name": key}},
         FeatureTypes=["FORMS"],
