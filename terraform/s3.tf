@@ -1,3 +1,29 @@
+## Deployments bucket — Lambda zip packages (processor zip exceeds 70 MB direct-upload limit)
+
+resource "aws_s3_bucket" "deployments" {
+  bucket = "${var.project_name}-deployments-${var.aws_account_id}"
+
+  tags = {
+    Project     = var.project_name
+    Environment = var.environment
+  }
+}
+
+resource "aws_s3_bucket_ownership_controls" "deployments" {
+  bucket = aws_s3_bucket.deployments.id
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "deployments" {
+  bucket                  = aws_s3_bucket.deployments.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
 ## Frontend bucket — served exclusively via CloudFront OAC; no public access
 
 resource "aws_s3_bucket" "frontend" {

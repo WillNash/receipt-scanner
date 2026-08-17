@@ -12,11 +12,22 @@ data "archive_file" "api_zip" {
   output_path = "${path.module}/../lambda/api/api.zip"
 }
 
+## Processor zip uploaded via S3 — direct Lambda upload is capped at ~70 MB;
+## the processor zip exceeds that limit once opencv-python-headless is included.
+
+resource "aws_s3_object" "processor_zip" {
+  bucket = aws_s3_bucket.deployments.id
+  key    = "lambda/processor.zip"
+  source = data.archive_file.processor_zip.output_path
+  etag   = data.archive_file.processor_zip.output_md5
+}
+
 ## Processor Lambda — runs in ap-southeast-2; calls Textract in the same region
 
 resource "aws_lambda_function" "bedrock_processor" {
   function_name    = "${var.project_name}-processor"
-  filename         = data.archive_file.processor_zip.output_path
+  s3_bucket        = aws_s3_bucket.deployments.id
+  s3_key           = aws_s3_object.processor_zip.key
   source_code_hash = data.archive_file.processor_zip.output_base64sha256
   role             = aws_iam_role.lambda_processor.arn
   handler          = "handler.lambda_handler"
