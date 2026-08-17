@@ -108,6 +108,7 @@ def process_record(record):
             result = copy_job_result(prior_job_id, job_id, image_hash)
             if result:
                 print(f"DUPLICATE image_hash={image_hash[:12]}… reusing job {prior_job_id}")
+                s3.delete_object(Bucket=bucket, Key=key)
                 expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
                 update_job(job_id, {
                     "status": {"S": "COMPLETE"},
