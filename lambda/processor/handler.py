@@ -19,7 +19,10 @@ dynamodb = boto3.client("dynamodb", region_name=PRIMARY_REGION)
 textract = boto3.client("textract", region_name=PRIMARY_REGION)
 
 FOOTER_RE = re.compile(
-    r"\b(TOTAL|SUBTOTAL|SUB\s+TOTAL|BALANCE\s+DUE|EFTPOS|GST|TAX|"
+    # Anchored to row start (after optional item-count prefix like "36 ") so that
+    # product names containing footer words (e.g. "COLGATE TOTAL TOOTHPASTE") are
+    # not mistaken for summary lines.
+    r"^\d*\s*\b(TOTAL|SUBTOTAL|SUB\s+TOTAL|BALANCE\s+DUE|EFTPOS|GST|TAX|"
     r"CHANGE|CASH|CREDIT|DEBIT|CARD|PURCHASE|TERMINAL|TRAN|CHEQUE|SUPERVISOR)\b",
     re.IGNORECASE,
 )
@@ -49,7 +52,7 @@ HEADER_WORDS = {"ITEM", "DESCRIPTION", "PRODUCT", "ITEMS", "ITEM NAME", "QTY", "
 DISCOUNT_RE = re.compile(r"-\$?([\d,]+\.\d{2})\s*$")
 
 # Tolerance (in normalised image coordinates 0–1) for grouping column blocks on the same row
-ROW_TOLERANCE = 0.005
+ROW_TOLERANCE = 0.007
 
 
 def lambda_handler(event, context):
@@ -296,7 +299,7 @@ def get_receipt_rows(blocks_by_id: dict, is_landscape: bool) -> list[str]:
     by Top; emit row groups in descending Left order (receipt top = image right).
 
     Same-row column blocks (description + qty + price) are a few pixels apart on the
-    primary axis; consecutive rows are ~10 px apart. ROW_TOLERANCE = 0.005 captures
+    primary axis; consecutive rows are ~10 px apart. ROW_TOLERANCE captures
     same-row columns without merging adjacent rows.
     """
     lines = [b for b in blocks_by_id.values() if b.get("BlockType") == "LINE"]
