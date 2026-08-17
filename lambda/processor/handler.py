@@ -29,9 +29,10 @@ QTY_RE = re.compile(
     r"^(\d+)\s*[@×xX]\s*\$?([\d.]+)(?:\s+\$?([\d,]+\.\d{2}))?\s*$"
 )
 
-# Weight qty row: "1.976 Kg @ $1.99/Kg $3.93" (clean) or "1.901 Kgug $3.99/Kg $7.58" (OCR garbled @)
+# Weight qty row: "1.976 Kg @ $1.99/Kg $3.93", garbled "1.901 Kgug $3.99/Kg $7.58", or "1.401 Kg à $1.99/Kg $2.79"
+# [^$\d]* absorbs any separator/OCR garbage between the Kg weight and the unit price
 QTY_WEIGHT_RE = re.compile(
-    r"^([\d.]+)\s*Kg\S*\s*(?:[@×xX]\s*)?\$?([\d.]+)/Kg\s+\$?([\d,]+\.\d{2})\s*$"
+    r"^([\d.]+)\s*Kg[^$\d]*\$?([\d.]+)/Kg\s+\$?([\d,]+\.\d{2})\s*$"
 )
 
 # Discrete qty row without @: OCR may drop the @ symbol, e.g. "20 $3.99 $7.98" (was "2 @ $3.99 $7.98")

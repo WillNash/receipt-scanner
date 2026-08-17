@@ -304,7 +304,7 @@ function buildReceiptCard(job) {
             <td>${escapeHtml(it.description)}</td>
             <td>${escapeHtml(it.quantity)}</td>
             <td>${escapeHtml(it.unit_price)}</td>
-            ${hasDiscount ? `<td>${it.discount ? "-$" + escapeHtml(it.discount) : ""}</td>` : ""}
+            ${hasDiscount ? `<td>${it.discount ? escapeHtml(it.discount) : ""}</td>` : ""}
             <td>${escapeHtml(it.price)}</td>
           </tr>`).join("")}
       </tbody>
