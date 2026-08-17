@@ -24,12 +24,17 @@ FOOTER_RE = re.compile(
 # Trailing price on a row: optional $ then digits.cents at end
 PRICE_TAIL_RE = re.compile(r"\s+\$?([\d,]+\.\d{2})\s*$")
 
-# Qty row with @: "2 @ $3.49 $6.98" or "1.976 Kg @ $1.99/Kg $3.93"
+# Discrete qty row with @: "2 @ $3.49 $6.98"
 QTY_RE = re.compile(
-    r"^([\d.]+)\s*(?:Kg\s*)?[@×xX]\s*\$?([\d.]+)(?:/Kg)?(?:\s+\$?([\d,]+\.\d{2}))?\s*$"
+    r"^(\d+)\s*[@×xX]\s*\$?([\d.]+)(?:\s+\$?([\d,]+\.\d{2}))?\s*$"
 )
 
-# Qty row without @: OCR may drop the @ symbol, e.g. "20 $3.99 $7.98" (was "2 @ $3.99 $7.98")
+# Weight qty row: "1.976 Kg @ $1.99/Kg $3.93" (clean) or "1.901 Kgug $3.99/Kg $7.58" (OCR garbled @)
+QTY_WEIGHT_RE = re.compile(
+    r"^([\d.]+)\s*Kg\S*\s*(?:[@×xX]\s*)?\$?([\d.]+)/Kg\s+\$?([\d,]+\.\d{2})\s*$"
+)
+
+# Discrete qty row without @: OCR may drop the @ symbol, e.g. "20 $3.99 $7.98" (was "2 @ $3.99 $7.98")
 QTY_NO_AT_RE = re.compile(r"^(\d+)\s+\$?([\d.]+)\s+\$?([\d,]+\.\d{2})\s*$")
 
 # Column header rows — skip these
@@ -390,21 +395,25 @@ def extract_line_items(rows: list[str]) -> list[dict]:
         if m:
             qty_str, unit_str, line_total = m.group(1), m.group(2), m.group(3)
         else:
-            m = QTY_NO_AT_RE.match(text)
+            m = QTY_WEIGHT_RE.match(text)
             if m:
-                raw_qty, unit_str, line_total = m.group(1), m.group(2), m.group(3)
-                qty_str = raw_qty
-                try:
-                    u = float(unit_str)
-                    t = float(line_total.replace(",", ""))
-                    n = int(raw_qty)
-                    if abs(round(n * u, 2) - t) > 0.02:
-                        # OCR likely merged "2 @" into "20" — recover true qty
-                        q = round(t / u)
-                        if q > 0 and abs(round(q * u, 2) - t) <= 0.02:
-                            qty_str = str(q)
-                except (ValueError, TypeError):
-                    pass
+                qty_str, unit_str, line_total = m.group(1), m.group(2), m.group(3)
+            else:
+                m = QTY_NO_AT_RE.match(text)
+                if m:
+                    raw_qty, unit_str, line_total = m.group(1), m.group(2), m.group(3)
+                    qty_str = raw_qty
+                    try:
+                        u = float(unit_str)
+                        t = float(line_total.replace(",", ""))
+                        n = int(raw_qty)
+                        if abs(round(n * u, 2) - t) > 0.02:
+                            # OCR likely merged "2 @" into "20" — recover true qty
+                            q = round(t / u)
+                            if q > 0 and abs(round(q * u, 2) - t) <= 0.02:
+                                qty_str = str(q)
+                    except (ValueError, TypeError):
+                        pass
 
         if m:
             if not items_started:
