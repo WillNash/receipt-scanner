@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import re
@@ -5,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote_plus
 
 import boto3
+import cv2
+import numpy as np
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
 LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
@@ -129,7 +132,116 @@ def save_debug(job_id: str, payload: dict) -> str:
     return debug_key
 
 
+def crop_receipt(bucket: str, key: str) -> None:
+    """
+    Detect the receipt strip using MSER text-density and crop to it.
+
+    MSER finds stable dark-on-light blobs — printed characters. The receipt has
+    hundreds of them; background fabric and surfaces have very few. We project all
+    character-like region centres onto the X and Y axes, build a smoothed density
+    histogram on each axis, and find the contiguous high-density band. That band
+    is the receipt extent on that axis.
+
+    Using the bounding hull of all valid MSER points fails when a handful of
+    false-positive blobs appear at the image corners. The density approach is robust
+    to sparse background noise because it looks for the densest connected run, not
+    the outermost point.
+    """
+    MSER_SCALE = 2000      # longest side for analysis thumbnail
+    MIN_BBOX = 20          # min character blob area (px²) at MSER_SCALE
+    MAX_BBOX = 1500        # max character blob area (px²) at MSER_SCALE
+    HIST_BINS = 40         # histogram bins along each axis
+    SMOOTH_WIN = 5         # smoothing window (bins) for density histogram
+    DENSITY_FRAC = 0.60    # fraction of peak density to define "receipt band"
+    PAD_FRAC = 0.05        # fractional padding added to each end of the band
+    MIN_GAIN = 0.85        # skip if crop keeps ≥85 % of original pixels
+
+    try:
+        data = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+        arr = np.frombuffer(data, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            print("CROP_SKIPPED: could not decode image")
+            return
+
+        h, w = img.shape[:2]
+        scale = MSER_SCALE / max(h, w)
+        sw, sh = max(1, int(w * scale)), max(1, int(h * scale))
+        small = cv2.resize(img, (sw, sh), interpolation=cv2.INTER_AREA)
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
+        mser = cv2.MSER_create(5, MIN_BBOX, MAX_BBOX, 0.25)
+        regions, _ = mser.detectRegions(gray)
+
+        valid_cx, valid_cy = [], []
+        for region in regions:
+            pts = region.reshape(-1, 1, 2)
+            rx, ry, rw, rh = cv2.boundingRect(pts)
+            if rw == 0 or rh == 0:
+                continue
+            bbox_area = rw * rh
+            aspect = rw / rh
+            fill = len(region) / bbox_area          # pixel count / bbox area
+            if (0.15 < aspect < 6.0) and (0.1 < fill < 0.9) and (MIN_BBOX < bbox_area < MAX_BBOX):
+                valid_cx.append(rx + rw / 2)
+                valid_cy.append(ry + rh / 2)
+
+        print(f"MSER regions={len(regions)} text-like={len(valid_cx)}")
+        if not valid_cx:
+            print("CROP_SKIPPED: no text-like MSER regions found")
+            return
+
+        def dense_band(centres, size):
+            hist, edges = np.histogram(centres, bins=HIST_BINS, range=(0, size))
+            kernel = np.ones(SMOOTH_WIN) / SMOOTH_WIN
+            smoothed = np.convolve(hist, kernel, mode="same")
+            threshold = smoothed.max() * DENSITY_FRAC
+            active = [i for i, s in enumerate(smoothed) if s >= threshold]
+            if not active:
+                return 0, size
+            pad = int(size * PAD_FRAC)
+            lo = max(0, int(edges[active[0]]) - pad)
+            hi = min(size, int(edges[active[-1] + 1]) + pad)
+            return lo, hi
+
+        x_lo, x_hi = dense_band(valid_cx, sw)
+        y_lo, y_hi = dense_band(valid_cy, sh)
+
+        left  = max(0, int(x_lo / scale))
+        upper = max(0, int(y_lo / scale))
+        right = min(w, int(x_hi / scale))
+        lower = min(h, int(y_hi / scale))
+
+        pixel_ratio = (right - left) * (lower - upper) / (w * h)
+        if pixel_ratio >= MIN_GAIN:
+            print(f"CROP_SKIPPED: {pixel_ratio:.0%} of image — no meaningful gain")
+            return
+
+        cropped = img[upper:lower, left:right]
+        is_jpeg = key.lower().endswith((".jpg", ".jpeg"))
+        ext = ".jpg" if is_jpeg else ".png"
+        params = [cv2.IMWRITE_JPEG_QUALITY, 95] if is_jpeg else []
+        ok, buf = cv2.imencode(ext, cropped, params)
+        if not ok:
+            print("CROP_SKIPPED: imencode failed")
+            return
+
+        cropped_bytes = buf.tobytes()
+        print(f"CROP {w}x{h} -> {right-left}x{lower-upper} "
+              f"{len(data)//1024}KB -> {len(cropped_bytes)//1024}KB ({pixel_ratio:.0%} area)")
+        s3.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=cropped_bytes,
+            ContentType="image/jpeg" if is_jpeg else "image/png",
+        )
+
+    except Exception as exc:
+        print(f"CROP_SKIPPED: {exc}")
+
+
 def analyze_receipt(bucket: str, key: str, job_id: str) -> dict:
+    crop_receipt(bucket, key)
     response = textract.analyze_document(
         Document={"S3Object": {"Bucket": bucket, "Name": key}},
         FeatureTypes=["FORMS"],
