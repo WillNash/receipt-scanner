@@ -9,8 +9,7 @@
         android:maxSdkVersion="32"/>
 
     <application
-        android:label="Receipt Scanner"
-        android:icon="@mipmap/ic_launcher">
+        android:label="Receipt Scanner">
 
         <activity
             android:name=".MainActivity"
