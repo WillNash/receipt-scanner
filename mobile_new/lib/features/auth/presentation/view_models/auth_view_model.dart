@@ -1,4 +1,3 @@
-import 'package:flutter_appauth/flutter_appauth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -17,7 +16,7 @@ final _secureStorageProvider = Provider<FlutterSecureStorage>(
 );
 
 final _authServiceProvider = Provider<AuthService>(
-  (_) => const AuthService(FlutterAppAuth()),
+  (_) => AuthService(),
 );
 
 final authRepositoryProvider = Provider<AuthRepository>(
@@ -77,10 +76,10 @@ class AuthNotifier extends Notifier<AuthState> {
     }
   }
 
-  Future<void> signIn() async {
+  Future<void> signIn(String username, String password) async {
     state = const AuthLoading();
     try {
-      final tokens = await _repo.signIn();
+      final tokens = await _repo.signIn(username, password);
       state = Authenticated(
         tokens: tokens,
         email: AuthRepository.extractEmail(tokens.idToken),
@@ -96,7 +95,6 @@ class AuthNotifier extends Notifier<AuthState> {
     state = const Unauthenticated();
   }
 
-  // Returns a valid id_token, refreshing transparently if needed.
   Future<String?> getIdToken() async {
     final current = state;
     if (current is! Authenticated) return null;
@@ -108,10 +106,7 @@ class AuthNotifier extends Notifier<AuthState> {
     }
 
     if (!identical(refreshed, current.tokens)) {
-      state = Authenticated(
-        tokens: refreshed,
-        email: current.email,
-      );
+      state = Authenticated(tokens: refreshed, email: current.email);
     }
     return refreshed.idToken;
   }

@@ -16,8 +16,8 @@ class AuthRepository {
   static const _keyRefreshToken = 'refresh_token';
   static const _keyExpiry = 'expiry';
 
-  Future<AuthTokens> signIn() async {
-    final tokens = await _service.signIn();
+  Future<AuthTokens> signIn(String username, String password) async {
+    final tokens = await _service.signIn(username, password);
     await _store(tokens);
     return tokens;
   }

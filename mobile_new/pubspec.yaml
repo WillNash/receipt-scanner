@@ -17,9 +17,6 @@ dependencies:
   # Navigation
   go_router: ^14.2.7
 
-  # Auth — Cognito OAuth2 PKCE
-  flutter_appauth: ^8.0.0
-
   # Secure token storage
   flutter_secure_storage: ^9.2.2
 

@@ -1,39 +1,36 @@
-import 'package:flutter_appauth/flutter_appauth.dart';
+import 'package:dio/dio.dart';
 
 import '../../../../core/config/app_config.dart';
 import '../models/auth_tokens.dart';
 
 class AuthService {
-  const AuthService(this._appAuth);
+  AuthService() : _dio = Dio();
 
-  final FlutterAppAuth _appAuth;
+  final Dio _dio;
 
-  static const _serviceConfig = AuthorizationServiceConfiguration(
-    authorizationEndpoint: AppConfig.cognitoAuthEndpoint,
-    tokenEndpoint: AppConfig.cognitoTokenEndpoint,
-    endSessionEndpoint: AppConfig.cognitoEndSessionEndpoint,
-  );
+  static const _cognitoEndpoint =
+      'https://cognito-idp.${AppConfig.cognitoRegion}.amazonaws.com/';
 
-  Future<AuthTokens> signIn() async {
-    final result = await _appAuth.authorizeAndExchangeCode(
-      AuthorizationTokenRequest(
-        AppConfig.cognitoClientId,
-        AppConfig.redirectUri,
-        serviceConfiguration: _serviceConfig,
-        scopes: AppConfig.scopes,
-      ),
+  static const _headers = {
+    'X-Amz-Target': 'AWSCognitoIdentityProviderService.InitiateAuth',
+    'Content-Type': 'application/x-amz-json-1.1',
+  };
+
+  Future<AuthTokens> signIn(String username, String password) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      _cognitoEndpoint,
+      data: {
+        'AuthFlow': 'USER_PASSWORD_AUTH',
+        'ClientId': AppConfig.cognitoClientId,
+        'AuthParameters': {
+          'USERNAME': username,
+          'PASSWORD': password,
+        },
+      },
+      options: Options(headers: _headers),
     );
 
-    if (result?.idToken == null) {
-      throw Exception('Sign in failed: no id_token received');
-    }
-
-    return AuthTokens(
-      idToken: result!.idToken!,
-      accessToken: result.accessToken,
-      refreshToken: result.refreshToken,
-      expiry: result.accessTokenExpirationDateTime,
-    );
+    return _tokensFromResult(response.data!);
   }
 
   Future<AuthTokens?> refresh(AuthTokens current) async {
@@ -41,27 +38,37 @@ class AuthService {
     if (refreshToken == null) return null;
 
     try {
-      final result = await _appAuth.token(
-        TokenRequest(
-          AppConfig.cognitoClientId,
-          AppConfig.redirectUri,
-          serviceConfiguration: _serviceConfig,
-          refreshToken: refreshToken,
-          scopes: AppConfig.scopes,
-        ),
+      final response = await _dio.post<Map<String, dynamic>>(
+        _cognitoEndpoint,
+        data: {
+          'AuthFlow': 'REFRESH_TOKEN_AUTH',
+          'ClientId': AppConfig.cognitoClientId,
+          'AuthParameters': {'REFRESH_TOKEN': refreshToken},
+        },
+        options: Options(headers: _headers),
       );
 
-      if (result == null) return null;
-
-      // Cognito returns a new id_token on refresh
+      final tokens = _tokensFromResult(response.data!);
+      // Cognito does not return a new refresh token on refresh
       return AuthTokens(
-        idToken: result.idToken ?? current.idToken,
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken ?? refreshToken,
-        expiry: result.accessTokenExpirationDateTime,
+        idToken: tokens.idToken,
+        accessToken: tokens.accessToken,
+        refreshToken: refreshToken,
+        expiry: tokens.expiry,
       );
     } catch (_) {
       return null;
     }
+  }
+
+  AuthTokens _tokensFromResult(Map<String, dynamic> body) {
+    final result = body['AuthenticationResult'] as Map<String, dynamic>;
+    return AuthTokens(
+      idToken: result['IdToken'] as String,
+      accessToken: result['AccessToken'] as String?,
+      refreshToken: result['RefreshToken'] as String?,
+      expiry: DateTime.now()
+          .add(Duration(seconds: result['ExpiresIn'] as int? ?? 3600)),
+    );
   }
 }
