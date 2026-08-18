@@ -117,7 +117,7 @@ resource "aws_iam_role_policy" "lambda_api" {
       {
         Sid    = "DynamoDBReadWrite"
         Effect = "Allow"
-        Action = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem"]
+        Action = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem"]
         Resource = [
           aws_dynamodb_table.jobs.arn,
           "${aws_dynamodb_table.jobs.arn}/index/*",

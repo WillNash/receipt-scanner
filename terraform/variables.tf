@@ -32,3 +32,13 @@ variable "lambda_timeout_api" {
   type    = number
   default = 30
 }
+
+variable "daily_upload_limit" {
+  type    = number
+  default = 50
+}
+
+variable "global_upload_limit" {
+  type    = number
+  default = 100
+}

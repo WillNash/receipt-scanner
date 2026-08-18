@@ -75,11 +75,13 @@ resource "aws_lambda_function" "api_handler" {
 
   environment {
     variables = {
-      DYNAMODB_TABLE    = aws_dynamodb_table.jobs.name
-      UPLOADS_BUCKET    = aws_s3_bucket.uploads.bucket
+      DYNAMODB_TABLE       = aws_dynamodb_table.jobs.name
+      UPLOADS_BUCKET       = aws_s3_bucket.uploads.bucket
       COGNITO_USER_POOL_ID = aws_cognito_user_pool.main.id
-      PRIMARY_REGION    = var.primary_region
-      ALLOWED_ORIGIN    = "https://${aws_cloudfront_distribution.frontend.domain_name}"
+      PRIMARY_REGION       = var.primary_region
+      ALLOWED_ORIGIN       = "https://${aws_cloudfront_distribution.frontend.domain_name}"
+      DAILY_UPLOAD_LIMIT   = var.daily_upload_limit
+      GLOBAL_UPLOAD_LIMIT  = var.global_upload_limit
     }
   }
 

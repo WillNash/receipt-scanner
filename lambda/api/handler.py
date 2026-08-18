@@ -12,6 +12,8 @@ UPLOADS_BUCKET = os.environ["UPLOADS_BUCKET"]
 COGNITO_POOL_ID = os.environ["COGNITO_USER_POOL_ID"]
 PRIMARY_REGION = os.environ.get("PRIMARY_REGION", "ap-southeast-2")
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
+DAILY_UPLOAD_LIMIT = int(os.environ.get("DAILY_UPLOAD_LIMIT", "50"))
+GLOBAL_UPLOAD_LIMIT = int(os.environ.get("GLOBAL_UPLOAD_LIMIT", "100"))
 
 dynamodb = boto3.client("dynamodb", region_name=PRIMARY_REGION)
 s3 = boto3.client(
@@ -73,12 +75,47 @@ def lambda_handler(event, context):
         return make_response(404, {"error": "Not found"})
 
 
+def check_and_increment_global_count() -> bool:
+    resp = dynamodb.update_item(
+        TableName=DYNAMODB_TABLE,
+        Key={"job_id": {"S": "COUNT#GLOBAL"}},
+        UpdateExpression="ADD upload_count :one",
+        ExpressionAttributeValues={":one": {"N": "1"}},
+        ReturnValues="UPDATED_NEW",
+    )
+    count = int(resp["Attributes"]["upload_count"]["N"])
+    return count <= GLOBAL_UPLOAD_LIMIT
+
+
+def check_and_increment_daily_count(user_id: str) -> bool:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    expiry = int((datetime.now(timezone.utc) + timedelta(days=2)).timestamp())
+    resp = dynamodb.update_item(
+        TableName=DYNAMODB_TABLE,
+        Key={"job_id": {"S": f"COUNT#{user_id}#{today}"}},
+        UpdateExpression="ADD upload_count :one SET expires_at = if_not_exists(expires_at, :exp)",
+        ExpressionAttributeValues={
+            ":one": {"N": "1"},
+            ":exp": {"N": str(expiry)},
+        },
+        ReturnValues="UPDATED_NEW",
+    )
+    count = int(resp["Attributes"]["upload_count"]["N"])
+    return count <= DAILY_UPLOAD_LIMIT
+
+
 def handle_upload_url(event, user_id: str, user_email: str):
     body = json.loads(event.get("body") or "{}")
     content_type = body.get("contentType", "image/jpeg")
 
     if content_type not in VALID_CONTENT_TYPES:
         return make_response(400, {"error": f"Unsupported content type: {content_type}"})
+
+    if not check_and_increment_global_count():
+        return make_response(429, {"error": "Global upload limit reached."})
+
+    if not check_and_increment_daily_count(user_id):
+        return make_response(429, {"error": "Daily upload limit reached. Try again tomorrow."})
 
     ext = VALID_CONTENT_TYPES[content_type]
     job_id = str(uuid.uuid4())
