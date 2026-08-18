@@ -21,7 +21,6 @@ class AuthService {
         AppConfig.redirectUri,
         serviceConfiguration: _serviceConfig,
         scopes: AppConfig.scopes,
-        preferEphemeralSession: false,
       ),
     );
 

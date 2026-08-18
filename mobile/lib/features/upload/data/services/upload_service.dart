@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 
 import '../../../../core/config/app_config.dart';
-import '../../receipts/data/models/receipt.dart';
+import '../../../receipts/data/models/receipt.dart';
 
 class UploadService {
   UploadService(this._apiDio) : _s3Dio = Dio();

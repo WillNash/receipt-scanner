@@ -1,4 +1,4 @@
-import '../../receipts/data/models/receipt.dart';
+import '../../../receipts/data/models/receipt.dart';
 
 enum UploadStatus { idle, uploading, processing, complete, failed }
 
