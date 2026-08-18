@@ -40,16 +40,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           );
     } on Exception catch (e) {
       if (!mounted) return;
-      final message = e.toString();
-      setState(() {
-        _error = message.contains('NotAuthorizedException')
-            ? 'Incorrect email or password.'
-            : message.contains('UserNotFoundException')
-                ? 'No account found for that email.'
-                : message.contains('UserNotConfirmedException')
-                    ? 'Please verify your email before signing in.'
-                    : 'Sign in failed. Please try again.';
-      });
+      setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _signingIn = false);
     }
