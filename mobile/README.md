@@ -8,29 +8,17 @@ Flutter app for uploading receipt photos from your Android gallery to the existi
 - Android SDK / Android Studio (for `adb` and build tools)
 - The AWS backend deployed (`make deploy` from repo root)
 
-## 1. Fill in config
+## 1. Deploy the backend
 
-After running `make deploy`, run `terraform output` in the `terraform/` directory. Then edit:
-
-```
-mobile/lib/core/config/app_config.dart
-```
-
-Replace the two placeholder values:
-- `apiBaseUrl` → value of `api_invoke_url`
-- `cognitoClientId` → value of `cognito_client_id`
-
-If your Cognito domain prefix is different from `bedrock-image-ai-025423`, update `_cognitoBaseUrl` too.
-
-## 2. Redeploy Terraform
-
-The Cognito app client now includes the Android redirect URI. If you haven't redeployed since this file was added:
+From the repo root:
 
 ```bash
-cd terraform && terraform apply
+make deploy
 ```
 
-## 3. Build and install
+This provisions the infrastructure, and also generates `mobile/lib/core/config/app_config.dart` with the correct API URL and Cognito client ID — no manual config editing required.
+
+## 2. Build and install
 
 ```bash
 cd mobile

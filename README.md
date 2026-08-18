@@ -194,26 +194,15 @@ mobile/
 
 **Prerequisites:** [Flutter SDK](https://docs.flutter.dev/get-started/install) (stable, 3.22+) and Android SDK.
 
-**1. Deploy the backend first** (if you haven't already):
+**1. Deploy** (generates `mobile/lib/core/config/app_config.dart` automatically):
 
 ```bash
 make deploy
 ```
 
-**2. Fill in the app config** — open `mobile/lib/core/config/app_config.dart` and replace the two placeholder values with the output of `terraform output` from the `terraform/` directory:
+`make deploy` now injects the API URL and Cognito client ID into the Flutter config in the same pass it configures the web frontend — no manual copy-pasting required.
 
-| Placeholder | Terraform output key |
-|---|---|
-| `apiBaseUrl` | `api_invoke_url` |
-| `cognitoClientId` | `cognito_client_id` |
-
-**3. Apply the Terraform change** — the Cognito app client now includes the Android redirect URI. If you've already deployed, re-apply to push this:
-
-```bash
-cd terraform && terraform apply
-```
-
-**4. Build the APK:**
+**2. Build the APK:**
 
 ```bash
 cd mobile
