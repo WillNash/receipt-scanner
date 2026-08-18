@@ -17,20 +17,23 @@ class AuthService {
   };
 
   Future<AuthTokens> signIn(String username, String password) async {
-    final response = await _dio.post<Map<String, dynamic>>(
-      _cognitoEndpoint,
-      data: {
-        'AuthFlow': 'USER_PASSWORD_AUTH',
-        'ClientId': AppConfig.cognitoClientId,
-        'AuthParameters': {
-          'USERNAME': username,
-          'PASSWORD': password,
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        _cognitoEndpoint,
+        data: {
+          'AuthFlow': 'USER_PASSWORD_AUTH',
+          'ClientId': AppConfig.cognitoClientId,
+          'AuthParameters': {
+            'USERNAME': username,
+            'PASSWORD': password,
+          },
         },
-      },
-      options: Options(headers: _headers),
-    );
-
-    return _tokensFromResult(response.data!);
+        options: Options(headers: _headers),
+      );
+      return _tokensFromResult(response.data!);
+    } on DioException catch (e) {
+      throw Exception('Cognito error: ${e.response?.data}');
+    }
   }
 
   Future<AuthTokens?> refresh(AuthTokens current) async {
