@@ -1,7 +1,7 @@
 # Generated files
 frontend/app.js
 terraform/terraform.tfvars
-mobile/lib/core/config/app_config.dart
+mobile_new/lib/core/config/app_config.dart
 
 # Lambda build artifacts
 lambda/*/package/

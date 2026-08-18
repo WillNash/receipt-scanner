@@ -72,14 +72,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 TextFormField(
                   controller: _emailController,
                   decoration: const InputDecoration(
-                    labelText: 'Email',
+                    labelText: 'Username',
                     border: OutlineInputBorder(),
                   ),
-                  keyboardType: TextInputType.emailAddress,
+                  keyboardType: TextInputType.text,
                   textInputAction: TextInputAction.next,
                   autocorrect: false,
                   validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? 'Enter your email' : null,
+                      (v == null || v.trim().isEmpty) ? 'Enter your username' : null,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(

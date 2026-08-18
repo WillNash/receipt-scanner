@@ -15,7 +15,7 @@ TF_DIR = os.path.join(PROJECT_ROOT, "terraform")
 FRONTEND_DIR = os.path.join(PROJECT_ROOT, "frontend")
 APP_JS_TMPL = os.path.join(FRONTEND_DIR, "app.js.template")
 APP_JS_OUT = os.path.join(FRONTEND_DIR, "app.js")
-FLUTTER_CONFIG_DIR = os.path.join(PROJECT_ROOT, "mobile", "lib", "core", "config")
+FLUTTER_CONFIG_DIR = os.path.join(PROJECT_ROOT, "mobile_new", "lib", "core", "config")
 FLUTTER_CONFIG_TMPL = os.path.join(FLUTTER_CONFIG_DIR, "app_config.dart.template")
 FLUTTER_CONFIG_OUT = os.path.join(FLUTTER_CONFIG_DIR, "app_config.dart")
 
