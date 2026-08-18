@@ -34,7 +34,8 @@ class AuthService {
       );
       return _tokensFromResult(response.data!);
     } on DioException catch (e) {
-      throw Exception('Cognito error: ${e.response?.data}');
+      throw Exception(
+          'Cognito error [${e.type.name}]: ${e.message} | ${e.response?.data}');
     }
   }
 
