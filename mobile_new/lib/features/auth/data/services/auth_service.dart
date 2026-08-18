@@ -1,6 +1,6 @@
 import 'package:dio/dio.dart';
 
-import '../../../../core/config/app_config.dart';
+import '../../../../core/config/app_config.dart'; // for cognitoClientId
 import '../models/auth_tokens.dart';
 
 class AuthService {
@@ -9,7 +9,7 @@ class AuthService {
   final Dio _dio;
 
   static const _cognitoEndpoint =
-      'https://cognito-idp.${AppConfig.cognitoRegion}.amazonaws.com/';
+      'https://cognito-idp.ap-southeast-2.amazonaws.com/';
 
   static const _headers = {
     'X-Amz-Target': 'AWSCognitoIdentityProviderService.InitiateAuth',

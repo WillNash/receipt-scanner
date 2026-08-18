@@ -78,7 +78,6 @@ def inject_flutter_config(outputs: dict) -> None:
         "__API_BASE_URL__":      outputs["api_invoke_url"].rstrip("/"),
         "__COGNITO_CLIENT_ID__": outputs["cognito_client_id"],
         "__COGNITO_BASE_URL__":  outputs["cognito_base_url"].rstrip("/"),
-        "__COGNITO_REGION__":    outputs.get("primary_region", "ap-southeast-2"),
     }
 
     with open(FLUTTER_CONFIG_TMPL) as f:

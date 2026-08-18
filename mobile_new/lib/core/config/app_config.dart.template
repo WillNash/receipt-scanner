@@ -5,7 +5,6 @@ class AppConfig {
 
   static const String apiBaseUrl = '__API_BASE_URL__';
   static const String cognitoClientId = '__COGNITO_CLIENT_ID__';
-  static const String cognitoRegion = '__COGNITO_REGION__';
 
   static const int maxFileSizeBytes = 20 * 1024 * 1024;
   static const int pollIntervalMs = 3000;
