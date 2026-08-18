@@ -1,6 +1,8 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 
-import '../../../../core/config/app_config.dart'; // for cognitoClientId
+import '../../../../core/config/app_config.dart';
 import '../models/auth_tokens.dart';
 
 class AuthService {
@@ -20,14 +22,14 @@ class AuthService {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         _cognitoEndpoint,
-        data: {
+        data: jsonEncode({
           'AuthFlow': 'USER_PASSWORD_AUTH',
           'ClientId': AppConfig.cognitoClientId,
           'AuthParameters': {
             'USERNAME': username,
             'PASSWORD': password,
           },
-        },
+        }),
         options: Options(headers: _headers),
       );
       return _tokensFromResult(response.data!);
@@ -43,11 +45,11 @@ class AuthService {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         _cognitoEndpoint,
-        data: {
+        data: jsonEncode({
           'AuthFlow': 'REFRESH_TOKEN_AUTH',
           'ClientId': AppConfig.cognitoClientId,
           'AuthParameters': {'REFRESH_TOKEN': refreshToken},
-        },
+        }),
         options: Options(headers: _headers),
       );
 
