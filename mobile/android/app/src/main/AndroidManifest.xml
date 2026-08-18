@@ -10,7 +10,6 @@
 
     <application
         android:label="Receipt Scanner"
-        android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
 
         <activity
