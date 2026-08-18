@@ -1,0 +1,38 @@
+name: receipt_scanner
+description: Scan receipts with your Android camera roll and upload to AWS.
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+  flutter: '>=3.22.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^2.5.1
+
+  # Navigation
+  go_router: ^14.2.7
+
+  # Auth — Cognito OAuth2 PKCE
+  flutter_appauth: ^8.0.0
+
+  # Secure token storage
+  flutter_secure_storage: ^9.2.2
+
+  # HTTP client
+  dio: ^5.4.3+1
+
+  # Photo picking
+  image_picker: ^1.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

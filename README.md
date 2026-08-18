@@ -168,6 +168,62 @@ receipt-scanner/
 
 > `frontend/app.js` and `terraform/terraform.tfvars` are generated files and are `.gitignore`d.
 
+## Flutter Android app
+
+An Android app lives in `mobile/`. It connects to the same AWS backend — pick receipt photos from your gallery, upload them, and view results and history directly on your phone. No web browser required.
+
+### App structure
+
+```
+mobile/
+├── lib/
+│   ├── main.dart
+│   ├── core/
+│   │   ├── config/app_config.dart      # ← fill in after deploy (API URL + Cognito client ID)
+│   │   ├── network/api_client.dart     # Dio + auto Bearer token injection
+│   │   ├── router/app_router.dart      # GoRouter, auth-gated redirect
+│   │   └── theme/app_theme.dart
+│   └── features/
+│       ├── auth/                       # Cognito PKCE via flutter_appauth, tokens encrypted on device
+│       ├── upload/                     # multi-photo picker → presigned S3 PUT → Textract poll
+│       └── receipts/                   # receipt history (GET /receipts), pull-to-refresh
+└── android/                            # standard Flutter Android project
+```
+
+### Getting it on your phone
+
+**Prerequisites:** [Flutter SDK](https://docs.flutter.dev/get-started/install) (stable, 3.22+) and Android SDK.
+
+**1. Deploy** (generates `mobile/lib/core/config/app_config.dart` automatically):
+
+```bash
+make deploy
+```
+
+`make deploy` now injects the API URL and Cognito client ID into the Flutter config in the same pass it configures the web frontend — no manual copy-pasting required.
+
+**2. Build the APK:**
+
+```bash
+cd mobile
+flutter pub get
+flutter build apk --release
+```
+
+**5. Install on your Android phone** — either via USB:
+
+```bash
+adb install build/app/outputs/flutter-apk/app-release.apk
+```
+
+Or copy the APK to your phone via USB or Google Drive, tap it, and allow "Install unknown apps" when prompted (a one-time Android setting).
+
+### App flow
+
+1. **Login** — opens the Cognito hosted UI in the system browser; redirects back to the app automatically after sign-in
+2. **Upload tab** — pick one or more receipt photos from your gallery, then tap Upload; results (vendor, date, total, line items) appear inline as each receipt finishes processing
+3. **History tab** — your 20 most recent receipts; pull down to refresh
+
 ## Re-deploying after changes
 
 **Terraform or Lambda changes:**

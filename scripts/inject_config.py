@@ -15,6 +15,9 @@ TF_DIR = os.path.join(PROJECT_ROOT, "terraform")
 FRONTEND_DIR = os.path.join(PROJECT_ROOT, "frontend")
 APP_JS_TMPL = os.path.join(FRONTEND_DIR, "app.js.template")
 APP_JS_OUT = os.path.join(FRONTEND_DIR, "app.js")
+FLUTTER_CONFIG_DIR = os.path.join(PROJECT_ROOT, "mobile_new", "lib", "core", "config")
+FLUTTER_CONFIG_TMPL = os.path.join(FLUTTER_CONFIG_DIR, "app_config.dart.template")
+FLUTTER_CONFIG_OUT = os.path.join(FLUTTER_CONFIG_DIR, "app_config.dart")
 
 
 def get_tf_outputs() -> dict:
@@ -66,6 +69,29 @@ def inject_config(outputs: dict) -> None:
     print(f"Config injected → {APP_JS_OUT}")
 
 
+def inject_flutter_config(outputs: dict) -> None:
+    if not os.path.exists(FLUTTER_CONFIG_TMPL):
+        print("Flutter config template not found — skipping Flutter config injection.")
+        return
+
+    replacements = {
+        "__API_BASE_URL__":      outputs["api_invoke_url"].rstrip("/"),
+        "__COGNITO_CLIENT_ID__": outputs["cognito_client_id"],
+        "__COGNITO_BASE_URL__":  outputs["cognito_base_url"].rstrip("/"),
+    }
+
+    with open(FLUTTER_CONFIG_TMPL) as f:
+        content = f.read()
+
+    for placeholder, value in replacements.items():
+        content = content.replace(placeholder, value)
+
+    with open(FLUTTER_CONFIG_OUT, "w") as f:
+        f.write(content)
+
+    print(f"Flutter config injected → {FLUTTER_CONFIG_OUT}")
+
+
 def sync_to_s3(bucket_name: str, region: str) -> None:
     subprocess.run(
         [
@@ -87,6 +113,7 @@ def main() -> None:
     region = outputs.get("primary_region", "ap-southeast-2")
 
     inject_config(outputs)
+    inject_flutter_config(outputs)
     sync_to_s3(outputs["frontend_bucket_name"], region)
 
     print(f"\nDone! App live at: https://{outputs['cloudfront_domain']}/")
