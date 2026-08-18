@@ -1,0 +1,65 @@
+class LineItem {
+  const LineItem({
+    required this.description,
+    this.quantity,
+    this.unitPrice,
+    this.price,
+    this.discount,
+  });
+
+  final String description;
+  final String? quantity;
+  final String? unitPrice;
+  final String? price;
+  final String? discount;
+
+  factory LineItem.fromJson(Map<String, dynamic> json) => LineItem(
+        description: json['description'] as String? ?? '',
+        quantity: json['quantity'] as String?,
+        unitPrice: json['unit_price'] as String?,
+        price: json['price'] as String?,
+        discount: json['discount'] as String?,
+      );
+}
+
+class ReceiptJob {
+  const ReceiptJob({
+    required this.jobId,
+    required this.status,
+    required this.createdAt,
+    this.vendor,
+    this.receiptDate,
+    this.total,
+    this.items = const [],
+    this.updatedAt,
+  });
+
+  final String jobId;
+  final String status;
+  final String createdAt;
+  final String? vendor;
+  final String? receiptDate;
+  final String? total;
+  final List<LineItem> items;
+  final String? updatedAt;
+
+  bool get isComplete => status == 'COMPLETE';
+  bool get isFailed => status == 'FAILED';
+  bool get isPending => status == 'PENDING';
+
+  factory ReceiptJob.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'] as List<dynamic>? ?? [];
+    return ReceiptJob(
+      jobId: json['jobId'] as String,
+      status: json['status'] as String,
+      createdAt: json['createdAt'] as String? ?? '',
+      vendor: json['vendor'] as String?,
+      receiptDate: json['receiptDate'] as String?,
+      total: json['total'] as String?,
+      items: rawItems
+          .map((e) => LineItem.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      updatedAt: json['updatedAt'] as String?,
+    );
+  }
+}

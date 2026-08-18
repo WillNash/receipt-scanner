@@ -48,8 +48,14 @@ resource "aws_cognito_user_pool_client" "main" {
   supported_identity_providers         = ["COGNITO"]
 
   # Callback URL references CloudFront domain — Terraform resolves dependency automatically
-  callback_urls = ["https://${aws_cloudfront_distribution.frontend.domain_name}/callback"]
-  logout_urls   = ["https://${aws_cloudfront_distribution.frontend.domain_name}/"]
+  callback_urls = [
+    "https://${aws_cloudfront_distribution.frontend.domain_name}/callback",
+    "com.willnash.receiptscanner://callback",
+  ]
+  logout_urls = [
+    "https://${aws_cloudfront_distribution.frontend.domain_name}/",
+    "com.willnash.receiptscanner://logout",
+  ]
 
   access_token_validity  = 60   # minutes
   id_token_validity      = 60   # minutes
