@@ -20,7 +20,7 @@ class AuthService {
 
   Future<AuthTokens> signIn(String username, String password) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
+      final response = await _dio.post<String>(
         _cognitoEndpoint,
         data: jsonEncode({
           'AuthFlow': 'USER_PASSWORD_AUTH',
@@ -30,9 +30,12 @@ class AuthService {
             'PASSWORD': password,
           },
         }),
-        options: Options(headers: _headers),
+        options: Options(
+          headers: _headers,
+          responseType: ResponseType.plain,
+        ),
       );
-      return _tokensFromResult(response.data!);
+      return _tokensFromResult(jsonDecode(response.data!) as Map<String, dynamic>);
     } on DioException catch (e) {
       throw Exception(
           'Cognito error [${e.type.name}]: ${e.message} | ${e.error} | ${e.response?.data}');
@@ -44,17 +47,21 @@ class AuthService {
     if (refreshToken == null) return null;
 
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
+      final response = await _dio.post<String>(
         _cognitoEndpoint,
         data: jsonEncode({
           'AuthFlow': 'REFRESH_TOKEN_AUTH',
           'ClientId': AppConfig.cognitoClientId,
           'AuthParameters': {'REFRESH_TOKEN': refreshToken},
         }),
-        options: Options(headers: _headers),
+        options: Options(
+          headers: _headers,
+          responseType: ResponseType.plain,
+        ),
       );
 
-      final tokens = _tokensFromResult(response.data!);
+      final tokens = _tokensFromResult(
+          jsonDecode(response.data!) as Map<String, dynamic>);
       // Cognito does not return a new refresh token on refresh
       return AuthTokens(
         idToken: tokens.idToken,
