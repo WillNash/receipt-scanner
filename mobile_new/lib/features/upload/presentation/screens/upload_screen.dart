@@ -121,29 +121,22 @@ class _BottomActions extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: onCamera,
-                  icon: const Icon(Icons.camera_alt),
-                  label: const Text('Camera'),
-                ),
+              _TrayButton(
+                icon: Icons.camera_alt,
+                label: 'Camera',
+                onPressed: onCamera,
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: onGallery,
-                  icon: const Icon(Icons.photo_library),
-                  label: const Text('Gallery'),
-                ),
+              _TrayButton(
+                icon: Icons.photo_library,
+                label: 'Gallery',
+                onPressed: onGallery,
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: onSaved,
-                  icon: const Icon(Icons.folder_special),
-                  label: const Text('Saved'),
-                ),
+              _TrayButton(
+                icon: Icons.folder_special,
+                label: 'Saved',
+                onPressed: onSaved,
               ),
             ],
           ),
@@ -159,6 +152,45 @@ class _BottomActions extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _TrayButton extends StatelessWidget {
+  const _TrayButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.primary;
+    return InkWell(
+      onTap: onPressed,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 28),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                color: color,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
