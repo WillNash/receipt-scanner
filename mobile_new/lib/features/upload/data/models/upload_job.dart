@@ -1,6 +1,10 @@
 import '../../../receipts/data/models/receipt.dart';
 
-enum UploadStatus { idle, uploading, processing, complete, failed }
+class DuplicateImageException implements Exception {
+  const DuplicateImageException();
+}
+
+enum UploadStatus { idle, uploading, processing, complete, failed, duplicate }
 
 class PhotoUpload {
   const PhotoUpload({
@@ -22,7 +26,9 @@ class PhotoUpload {
   String get filename => filePath.split('/').last;
 
   bool get isDone =>
-      status == UploadStatus.complete || status == UploadStatus.failed;
+      status == UploadStatus.complete ||
+      status == UploadStatus.failed ||
+      status == UploadStatus.duplicate;
 
   PhotoUpload copyWith({
     UploadStatus? status,

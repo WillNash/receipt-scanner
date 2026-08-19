@@ -28,6 +28,9 @@ dependencies:
   # Photo picking
   image_picker: ^1.1.2
 
+  # SHA-256 hashing for duplicate detection
+  crypto: ^3.0.3
+
   # File system paths
   path_provider: ^2.1.2
 

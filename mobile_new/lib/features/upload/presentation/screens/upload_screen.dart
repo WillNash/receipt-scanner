@@ -359,6 +359,8 @@ class _UploadTile extends StatelessWidget {
         const Icon(Icons.check_circle, color: Colors.green),
       UploadStatus.failed =>
         const Icon(Icons.error_outline, color: Colors.red),
+      UploadStatus.duplicate =>
+        const Icon(Icons.content_copy, color: Colors.amber),
     };
   }
 
@@ -377,6 +379,7 @@ class _UploadTile extends StatelessWidget {
             if (upload.result?.total != null) 'Total: ${upload.result!.total}',
           ].join('  ·  '),
         ),
+      UploadStatus.duplicate => const Text('Already scanned — see History.'),
     };
   }
 }

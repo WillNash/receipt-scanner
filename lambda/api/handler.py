@@ -112,9 +112,19 @@ def check_and_increment_daily_count(user_id: str) -> bool:
 def handle_upload_url(event, user_id: str, user_email: str):
     body = json.loads(event.get("body") or "{}")
     content_type = body.get("contentType", "image/jpeg")
+    image_hash = body.get("imageHash")
 
     if content_type not in VALID_CONTENT_TYPES:
         return make_response(400, {"error": f"Unsupported content type: {content_type}"})
+
+    if image_hash and IMAGE_HASHES_TABLE:
+        resp = dynamodb.get_item(
+            TableName=IMAGE_HASHES_TABLE,
+            Key={"user_id": {"S": user_id}, "image_hash": {"S": image_hash}},
+        )
+        if resp.get("Item"):
+            prior_job_id = resp["Item"].get("job_id", {}).get("S", "")
+            return make_response(409, {"error": "duplicate", "jobId": prior_job_id})
 
     if not check_and_increment_global_count():
         return make_response(429, {"error": "Global upload limit reached."})

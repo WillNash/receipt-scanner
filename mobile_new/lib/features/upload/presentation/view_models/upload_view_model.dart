@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -149,8 +150,12 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
       final contentType = UploadService.contentTypeFor(filePath);
 
       final bytes = await File(filePath).readAsBytes();
-      final (:jobId, :uploadUrl) =
-          await _service.requestUploadUrl(contentType);
+      final imageHash = sha256.convert(bytes).toString();
+
+      final (:jobId, :uploadUrl) = await _service.requestUploadUrl(
+        contentType,
+        imageHash: imageHash,
+      );
 
       _update(id, (u) => u.copyWith(jobId: jobId));
 
@@ -179,6 +184,11 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
       _update(id, (u) => u.copyWith(
             status: UploadStatus.complete,
             result: result,
+          ));
+    } on DuplicateImageException {
+      _update(id, (u) => u.copyWith(
+            status: UploadStatus.duplicate,
+            error: 'Already scanned.',
           ));
     } on Exception catch (e) {
       _update(id, (u) => u.copyWith(
