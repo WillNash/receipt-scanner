@@ -19,7 +19,6 @@
         <div
           id="drop-zone"
           class="drop-zone"
-          role="button"
           tabindex="0"
           aria-label="Drop receipt images here or click to select"
         >
@@ -46,15 +45,16 @@
 
       <!-- Status section (shown while uploading / processing) -->
       <section id="status-section" style="display:none">
-        <div class="status-card">
+        <div class="status-card" tabindex="-1">
           <div class="spinner"></div>
-          <p id="status-text" class="status-text">Uploading…</p>
+          <p id="status-text" class="status-text" aria-live="polite" aria-atomic="true">Uploading…</p>
+          <button id="cancel-scan-btn" class="btn btn-secondary">Cancel</button>
         </div>
       </section>
 
       <!-- Results section (shown after scan completes) -->
       <section id="results-section" style="display:none">
-        <div id="results-list"></div>
+        <div id="results-list" tabindex="-1"></div>
         <button id="scan-another-btn" class="btn btn-primary" style="margin-top:1.25rem">Scan more receipts</button>
       </section>
 
