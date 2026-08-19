@@ -17,6 +17,7 @@ const POLL_INTERVAL_MS = 3000;
 // ── State ─────────────────────────────────────────────────────────────────────
 
 let selectedFiles = [];
+let scanAbortController = null;
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
 
@@ -89,6 +90,13 @@ function showMainSection(id) {
     const el = document.getElementById(s);
     if (el) el.style.display = s === id ? "" : "none";
   });
+  const section = document.getElementById(id);
+  if (!section) return;
+  const focusTarget =
+    section.querySelector('[tabindex="-1"]') ||
+    section.querySelector('[tabindex="0"]') ||
+    section.querySelector("button:not([disabled])");
+  if (focusTarget) focusTarget.focus();
 }
 
 function setStatus(text) {
@@ -97,8 +105,21 @@ function setStatus(text) {
 
 function showError(msg) {
   const el = document.getElementById("upload-error");
-  el.textContent = msg;
+  el.textContent = Array.isArray(msg) ? msg.join("\n") : msg;
   el.style.display = "";
+}
+
+function apiErrorMessage(status) {
+  if (status === 401 || status === 403) return "Your session has expired — sign in again.";
+  if (status === 429) return "You've reached the daily scan limit. Try again tomorrow.";
+  if (status >= 500) return "Something went wrong on our end. Try again in a moment.";
+  return `Unexpected error (${status}).`;
+}
+
+function formatDate(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? dateStr : d.toLocaleDateString();
 }
 
 function clearError() {
@@ -126,6 +147,7 @@ function isHeic(file) {
 async function selectFiles(files) {
   clearError();
   const fileArray = Array.from(files);
+  const errors = [];
   const heicCount = fileArray.filter(isHeic).length;
   const dropSub = document.getElementById("drop-sub");
 
@@ -143,24 +165,27 @@ async function selectFiles(files) {
         const name = file.name.replace(/\.(heic|heif)$/i, ".jpg");
         f = new File([blob], name, { type: "image/jpeg" });
       } catch (err) {
-        showError(`${file.name}: HEIC conversion failed.`);
+        errors.push(`${file.name}: HEIC conversion failed.`);
         continue;
       }
     } else if (!["image/jpeg", "image/png"].includes(file.type)) {
-      showError(`${file.name}: only JPEG, PNG, and HEIC are supported.`);
+      errors.push(`${file.name}: only JPEG, PNG, and HEIC are supported.`);
       continue;
     }
 
     if (f.size > MAX_FILE_BYTES) {
-      showError(`${f.name} exceeds 20 MB.`);
+      errors.push(`${f.name} exceeds 20 MB.`);
       continue;
     }
-    if (!selectedFiles.find(s => s.name === f.name && s.size === f.size)) {
+    if (selectedFiles.find(s => s.name === f.name && s.size === f.size)) {
+      errors.push(`${f.name} is already in the queue.`);
+    } else {
       selectedFiles.push(f);
     }
   }
 
-  dropSub.textContent = "JPEG, PNG, or HEIC · up to 5 MB each";
+  dropSub.textContent = "JPEG, PNG, or HEIC · up to 20 MB each";
+  if (errors.length) showError(errors.length === 1 ? errors[0] : errors);
   renderQueue();
 }
 
@@ -203,6 +228,9 @@ async function handleUpload() {
   const filesToProcess = [...selectedFiles];
   selectedFiles = [];
 
+  scanAbortController = new AbortController();
+  const { signal } = scanAbortController;
+
   try {
     // Step 1 — get presigned URLs in parallel
     const urlResults = await Promise.all(
@@ -217,7 +245,7 @@ async function handleUpload() {
         }).then(async r => {
           if (!r.ok) {
             const b = await r.json().catch(() => ({}));
-            throw new Error(b.error || `HTTP ${r.status}`);
+            throw new Error(b.error || apiErrorMessage(r.status));
           }
           return r.json();
         })
@@ -238,35 +266,51 @@ async function handleUpload() {
       )
     );
 
-    // Step 3 — poll all jobs in parallel
+    // Step 3 — poll all jobs in parallel (cancellable)
     const jobIds = urlResults.map(r => r.jobId);
     setStatus(`Scanning ${jobIds.length} receipt${jobIds.length > 1 ? "s" : ""}…`);
-    const results = await Promise.all(jobIds.map(id => pollUntilDone(id)));
+    const results = await Promise.all(jobIds.map(id => pollUntilDone(id, signal)));
+
+    if (signal.aborted) {
+      selectedFiles = filesToProcess;
+      renderQueue();
+      showMainSection("upload-section");
+      return;
+    }
 
     renderResults(results);
     await loadHistory();
   } catch (err) {
     console.error("Upload error:", err);
+    selectedFiles = filesToProcess;
     renderQueue();
     showMainSection("upload-section");
     showError(`Upload failed: ${err.message}`);
+  } finally {
+    scanAbortController = null;
   }
 }
 
-async function pollUntilDone(jobId, count = 0) {
-  if (count >= MAX_POLLS) return { jobId, status: "FAILED" };
+async function pollUntilDone(jobId, signal, count = 0) {
+  if (signal && signal.aborted) return { jobId, status: "CANCELLED" };
+  if (count >= MAX_POLLS) return { jobId, status: "FAILED", reason: "timeout" };
   try {
     const resp = await fetch(`${CONFIG.apiBaseUrl}/jobs/${jobId}`, {
       headers: { "Authorization": `Bearer ${getToken()}` },
+      signal,
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const job = await resp.json();
     if (job.status === "COMPLETE" || job.status === "FAILED") return job;
   } catch (err) {
+    if (err.name === "AbortError") return { jobId, status: "CANCELLED" };
     console.error(`Poll error for ${jobId}:`, err);
   }
-  await new Promise(res => setTimeout(res, POLL_INTERVAL_MS));
-  return pollUntilDone(jobId, count + 1);
+  await new Promise(res => {
+    const t = setTimeout(res, POLL_INTERVAL_MS);
+    if (signal) signal.addEventListener("abort", () => { clearTimeout(t); res(); }, { once: true });
+  });
+  return pollUntilDone(jobId, signal, count + 1);
 }
 
 // ── Receipt rendering ─────────────────────────────────────────────────────────
@@ -282,8 +326,11 @@ function buildReceiptCard(job) {
   const card = document.createElement("div");
 
   if (job.status === "FAILED") {
+    const msg = job.reason === "timeout"
+      ? "Scan is taking longer than expected — try again in a moment."
+      : "Scan failed — could not read this receipt.";
     card.className = "receipt-card receipt-card--failed";
-    card.innerHTML = `<p class="failed-text">Scan failed — could not read this receipt.</p>`;
+    card.innerHTML = `<p class="failed-text">${escapeHtml(msg)}</p>`;
     return card;
   }
 
@@ -315,9 +362,9 @@ function buildReceiptCard(job) {
       <span class="receipt-vendor">${escapeHtml(job.vendor || "Unknown vendor")}</span>
       ${job.total ? `<span class="receipt-total">${escapeHtml(job.total)}</span>` : ""}
     </div>
-    ${job.receiptDate ? `<div class="receipt-meta"><span class="receipt-date">${escapeHtml(job.receiptDate)}</span></div>` : ""}
+    ${job.receiptDate ? `<div class="receipt-meta"><span class="receipt-date">${escapeHtml(formatDate(job.receiptDate))}</span></div>` : ""}
     ${itemsHtml}
-    ${job.debugUrl ? `<div style="margin-top:0.75rem"><a href="${escapeHtml(job.debugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Download raw Textract response</a></div>` : ""}
+    ${job.debugUrl && localStorage.getItem("debug") ? `<div style="margin-top:0.75rem"><a href="${escapeHtml(job.debugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Download raw Textract response</a></div>` : ""}
   `;
   return card;
 }
@@ -362,6 +409,10 @@ document.addEventListener("DOMContentLoaded", () => {
   dropZone.addEventListener("keydown", e => {
     if (e.key === "Enter" || e.key === " ") fileInput.click();
   });
+  dropZone.addEventListener("dragenter", e => {
+    e.preventDefault();
+    dropZone.classList.add("drag-over");
+  });
   dropZone.addEventListener("dragover", e => {
     e.preventDefault();
     dropZone.classList.add("drag-over");
@@ -398,6 +449,10 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("scan-another-btn").addEventListener("click", () => {
     renderQueue();
     showMainSection("upload-section");
+  });
+
+  document.getElementById("cancel-scan-btn").addEventListener("click", () => {
+    if (scanAbortController) scanAbortController.abort();
   });
 
   document.getElementById("logout-btn").addEventListener("click", logout);
