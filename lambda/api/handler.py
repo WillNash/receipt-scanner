@@ -8,6 +8,8 @@ import boto3
 from botocore.config import Config
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
+LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
+IMAGE_HASHES_TABLE = os.environ.get("IMAGE_HASHES_TABLE", "")
 UPLOADS_BUCKET = os.environ["UPLOADS_BUCKET"]
 COGNITO_POOL_ID = os.environ["COGNITO_USER_POOL_ID"]
 PRIMARY_REGION = os.environ.get("PRIMARY_REGION", "ap-southeast-2")
@@ -26,7 +28,7 @@ s3 = boto3.client(
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
     "Content-Type": "application/json",
 }
 
@@ -71,6 +73,9 @@ def lambda_handler(event, context):
     elif method == "GET" and "/jobs/" in path:
         job_id = (event.get("pathParameters") or {}).get("jobId")
         return handle_get_job(job_id, user_id)
+    elif method == "DELETE" and "/receipts/" in path:
+        job_id = (event.get("pathParameters") or {}).get("jobId")
+        return handle_delete_receipt(job_id, user_id)
     else:
         return make_response(404, {"error": "Not found"})
 
@@ -179,6 +184,66 @@ def handle_get_job(job_id: str | None, user_id: str):
         return make_response(403, {"error": "Forbidden"})
 
     return make_response(200, format_receipt(item))
+
+
+def handle_delete_receipt(job_id: str | None, user_id: str):
+    if not job_id:
+        return make_response(400, {"error": "jobId required"})
+
+    result = dynamodb.get_item(
+        TableName=DYNAMODB_TABLE,
+        Key={"job_id": {"S": job_id}},
+    )
+    item = result.get("Item")
+    if not item:
+        return make_response(404, {"error": "Job not found"})
+    if item.get("user_id", {}).get("S") != user_id:
+        return make_response(403, {"error": "Forbidden"})
+
+    image_hash = item.get("image_hash", {}).get("S")
+    created_at = item.get("created_at", {}).get("S", "")
+
+    # Delete the job record
+    dynamodb.delete_item(
+        TableName=DYNAMODB_TABLE,
+        Key={"job_id": {"S": job_id}},
+    )
+
+    # Delete the dedup hash so the image can be re-uploaded later
+    if image_hash and IMAGE_HASHES_TABLE:
+        dynamodb.delete_item(
+            TableName=IMAGE_HASHES_TABLE,
+            Key={"user_id": {"S": user_id}, "image_hash": {"S": image_hash}},
+        )
+
+    # Delete all line items for this job
+    if LINE_ITEMS_TABLE and created_at:
+        prefix = f"{created_at}#{job_id}#"
+        resp = dynamodb.query(
+            TableName=LINE_ITEMS_TABLE,
+            KeyConditionExpression="#uid = :uid AND begins_with(#sk, :prefix)",
+            ExpressionAttributeNames={"#uid": "user_id", "#sk": "item_sk"},
+            ExpressionAttributeValues={
+                ":uid": {"S": user_id},
+                ":prefix": {"S": prefix},
+            },
+            ProjectionExpression="#uid, #sk",
+        )
+        keys_to_delete = [
+            {"user_id": it["user_id"], "item_sk": it["item_sk"]}
+            for it in resp.get("Items", [])
+        ]
+        for i in range(0, len(keys_to_delete), 25):
+            chunk = keys_to_delete[i:i + 25]
+            dynamodb.batch_write_item(
+                RequestItems={
+                    LINE_ITEMS_TABLE: [
+                        {"DeleteRequest": {"Key": key}} for key in chunk
+                    ]
+                }
+            )
+
+    return make_response(200, {"deleted": True})
 
 
 def format_receipt(item: dict) -> dict:

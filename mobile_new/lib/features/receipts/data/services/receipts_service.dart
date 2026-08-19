@@ -17,4 +17,8 @@ class ReceiptsService {
         .map((e) => ReceiptJob.fromJson(e as Map<String, dynamic>))
         .toList();
   }
+
+  Future<void> deleteReceipt(String jobId) async {
+    await _dio.delete<void>('${AppConfig.apiBaseUrl}/receipts/$jobId');
+  }
 }

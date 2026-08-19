@@ -23,4 +23,22 @@ class ReceiptsNotifier extends AsyncNotifier<List<ReceiptJob>> {
       () => ref.read(_receiptsServiceProvider).fetchReceipts(),
     );
   }
+
+  Future<void> delete(String jobId) async {
+    final current = state.value;
+    if (current == null) return;
+
+    // Optimistic remove
+    state = AsyncData(current.where((r) => r.jobId != jobId).toList());
+
+    try {
+      await ref.read(_receiptsServiceProvider).deleteReceipt(jobId);
+    } catch (_) {
+      // Restore on failure
+      state = await AsyncValue.guard(
+        () => ref.read(_receiptsServiceProvider).fetchReceipts(),
+      );
+      rethrow;
+    }
+  }
 }

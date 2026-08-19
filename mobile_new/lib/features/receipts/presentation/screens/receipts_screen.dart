@@ -48,7 +48,53 @@ class ReceiptsScreen extends ConsumerWidget {
             onRefresh: () => ref.read(receiptsProvider.notifier).refresh(),
             child: ListView.builder(
               itemCount: receipts.length,
-              itemBuilder: (context, i) => ReceiptCard(job: receipts[i]),
+              itemBuilder: (context, i) {
+                final job = receipts[i];
+                return Dismissible(
+                  key: ValueKey(job.jobId),
+                  direction: DismissDirection.endToStart,
+                  background: Container(
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.only(right: 20),
+                    color: Colors.red.shade700,
+                    child: const Icon(Icons.delete_outline, color: Colors.white),
+                  ),
+                  confirmDismiss: (_) => showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Delete receipt?'),
+                      content: const Text(
+                        'This permanently deletes the receipt, scan data, and all line items.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(ctx, false),
+                          child: const Text('Cancel'),
+                        ),
+                        FilledButton(
+                          onPressed: () => Navigator.pop(ctx, true),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: Colors.red.shade700,
+                          ),
+                          child: const Text('Delete'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  onDismissed: (_) async {
+                    try {
+                      await ref.read(receiptsProvider.notifier).delete(job.jobId);
+                    } catch (_) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Failed to delete receipt.')),
+                        );
+                      }
+                    }
+                  },
+                  child: ReceiptCard(job: job),
+                );
+              },
             ),
           );
         },
