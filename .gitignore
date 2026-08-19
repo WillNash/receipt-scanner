@@ -2,6 +2,8 @@
 frontend/app.js
 terraform/terraform.tfvars
 mobile_new/lib/core/config/app_config.dart
+mobile/build/
+mobile/.dart_tool/
 
 # Lambda build artifacts
 lambda/*/package/
