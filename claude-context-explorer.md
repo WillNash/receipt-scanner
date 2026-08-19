@@ -1,135 +1,160 @@
-# Explorer Findings: ux-dev / frontend-design Skill Boundary
+# Flutter App Exploration — Receipt Scanner (mobile_new/)
 
-## 1. File Paths
+## Project Root
 
-- **ux-dev skill:** `/home/devuser/.claude/plugins/wills-plugins/plugins/wills-skills/commands/ux-dev/SKILL.md`
-- **frontend-design skill:** `/home/devuser/.claude/plugins/marketplaces/claude-plugins-official/plugins/frontend-design/skills/frontend-design/SKILL.md`
-
-Both files exist. The frontend-design skill is an official marketplace plugin. The ux-dev skill is a personal wills-plugins skill already created.
+All Flutter/Dart code lives under `/workspace/active_repo/mobile_new/`.
 
 ---
 
-## 2. Every Place in ux-dev That Explicitly Mentions "frontend-design skill"
+## 1. Project Structure
 
-There are five explicit references. Exact quoted lines (by line number in the SKILL.md):
-
-**Line 3 (description frontmatter):**
-> "Does not replace the frontend-design skill, which owns visual aesthetics."
-
-**Line 151 (Wireframe critique section):**
-> "If asked to 'make it look better,' redirect to the frontend-design skill for aesthetic choices and stay on interaction and structure."
-
-**Line 161 (Design system critique section):**
-> "Do not evaluate palette, typeface, or brand aesthetic — direct those concerns to the frontend-design skill."
-
-**Line 171 (Microcopy section):**
-> "brand voice decisions belong to frontend-design."
-
-**Line 175 (Deliverable generation section):**
-> "Name the handoff point explicitly: 'the following spec should be passed to a frontend developer or the frontend-design skill for implementation.'"
-
----
-
-## 3. Domains ux-dev Explicitly Says It Does NOT Cover (= frontend-design's remit)
-
-From the description frontmatter (line 3):
-- Color palettes
-- Typography
-- CSS
-- HTML
-- Flutter widget code
-- AWS
-- Python
-- Brand voice
-- Marketing copy
-- Visual aesthetics (summary: "does not replace the frontend-design skill, which owns visual aesthetics")
-
-From the body:
-- **Wireframe critique:** "Do not comment on color, typefaces, or visual styling." (line 151)
-- **Design system critique:** "Do not evaluate palette, typeface, or brand aesthetic." (line 161)
-- **Microcopy:** "brand voice decisions belong to frontend-design. Do not produce surrounding HTML or CSS." (line 171)
-- **Deliverable generation:** "Do not produce HTML, CSS, or implementation code." (line 175)
-
----
-
-## 4. Domains ux-dev Explicitly Says It DOES Cover (must not be duplicated in frontend-design)
-
-From the description frontmatter (line 3):
-- Heuristic evaluation (Nielsen's 10)
-- WCAG compliance / accessibility auditing
-- Information architecture review
-- User flow critique
-- Wireframe critique (structure/interaction only, not color or typography)
-- Design system critique (component API, token naming, a11y annotations — not palette/typeface)
-- Persona creation
-- Journey map creation and critique
-- Usability testing, card sorting, tree testing planning and interpretation
-- Form design review
-- Navigation design review
-- Progressive disclosure assessment
-- Onboarding flow review
-- VUI design review
-- Touch targets, keyboard navigation, focus management
-- Error states, empty states
-- TV/10-foot UI, kiosk UX, cross-platform UX consistency
-- UX microcopy: error messages, button labels, empty states, placeholder text (as structural elements — not brand voice)
-- Platform-agnostic UX methodology
-- Gestalt principles applied to layout critique
-
-From the body, additional explicit scope:
-- Severity rating of heuristic violations (0–4 scale)
-- WCAG 2.2 AA conformance (specific criteria 1.3.1, 1.3.5, 1.4.1, 1.4.3, 1.4.11, 2.1.2, 2.4.3, 2.4.7, 2.4.11, 2.4.13, 2.5.7, 2.5.8, 3.3.2, 3.3.7, 3.3.8)
-- Journey map emotional arc (minimum 5-point scale)
-- Anti-pattern recognition (14-row table)
-- IA review (four systems: organization, labeling, navigation, search)
+```
+mobile_new/
+  pubspec.yaml
+  lib/
+    main.dart
+    core/
+      config/app_config.dart          # Static constants (API URL, Cognito, limits)
+      network/api_client.dart         # Dio instance with auth interceptor
+      router/app_router.dart          # GoRouter config + bottom-nav shell
+      theme/app_theme.dart            # Material3 theme
+    features/
+      auth/
+        data/
+          models/auth_tokens.dart
+          repositories/auth_repository.dart
+          services/auth_service.dart
+        presentation/
+          screens/login_screen.dart
+          view_models/auth_view_model.dart
+      upload/
+        data/
+          models/upload_job.dart
+          services/upload_service.dart
+        presentation/
+          screens/upload_screen.dart
+          view_models/upload_view_model.dart
+      receipts/
+        data/
+          models/receipt.dart
+          services/receipts_service.dart
+        presentation/
+          screens/receipts_screen.dart
+          view_models/receipts_view_model.dart
+          widgets/receipt_card.dart
+  test/
+    widget_test.dart
+```
 
 ---
 
-## 5. ux-dev Activation Trigger (full description field, line 3)
+## 2. Key Dependencies (pubspec.yaml)
 
-> "Activates for UX methodology, interaction design, and design critique. Use when asked to: do a heuristic evaluation; audit for WCAG compliance or accessibility; review an information architecture or sitemap; critique a user flow, wireframe, or design system; create a persona; create or critique a journey map; run or plan usability testing, card sorting, or tree testing; assess form design, navigation design, or progressive disclosure; or apply Nielsen's heuristics or Gestalt principles. Also activates for UX questions about touch targets, keyboard navigation, focus management, error states, empty states, onboarding flows, VUI design, TV/10-foot UI, kiosk UX, or cross-platform UX consistency. Also activates for UX microcopy: error messages, button labels, empty states, placeholder text. Does NOT activate for color palettes, typography, CSS, HTML, Flutter widget code, AWS, Python, brand voice, or marketing copy. Does not replace the frontend-design skill, which owns visual aesthetics."
-
----
-
-## 6. Does a frontend-design Skill File Already Exist?
-
-Yes. It exists at:
-
-`/home/devuser/.claude/plugins/marketplaces/claude-plugins-official/plugins/frontend-design/skills/frontend-design/SKILL.md`
-
-It is an official marketplace plugin (not a personal wills-plugins skill). Its description field is:
-
-> "Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults."
-
-It does NOT contain any mention of "ux-dev" anywhere in its body. Its body covers: aesthetic direction, palette (4-6 named hex values), typeface selection and pairing, layout concept, CSS authoring, motion/animation, and copy as design material (tone, brand voice, register). It explicitly treats words as a design element but from an aesthetic/brand-voice angle, not a UX methodology angle.
+- State management: `flutter_riverpod ^2.5.1`
+- Navigation: `go_router ^14.2.7`
+- HTTP: `dio ^5.4.3+1`
+- Image picking: `image_picker ^1.1.2`
+- Secure storage: `flutter_secure_storage ^9.2.2`
+- No camera package is present.
 
 ---
 
-## 7. Boundary Summary for the Planner
+## 3. Image Picking — Current Implementation
 
-| Domain | Owner |
-|---|---|
-| Color palette, hex tokens, visual identity | frontend-design |
-| Typography: typeface selection, type scale, pairing | frontend-design |
-| CSS authoring, HTML implementation | frontend-design |
-| Layout aesthetic, visual signature, motion/animation design | frontend-design |
-| Brand voice, marketing copy, stylistic copy direction | frontend-design |
-| Copy as design material: tone, register, personality | frontend-design |
-| UX microcopy as structural interface element (button labels, error messages, empty states, placeholder text — functional copy, not tonal direction) | ux-dev |
-| Heuristic evaluation, interaction design, usability | ux-dev |
-| WCAG / accessibility as design discipline | ux-dev |
-| Information architecture | ux-dev |
-| User flows, wireframe critique (structure only), personas, journey maps | ux-dev |
-| Design system: component API, token naming, a11y annotations | ux-dev |
-| Platform UX (mobile, TV, VUI, kiosk) | ux-dev |
-| Usability testing, card sorting, tree testing methodology | ux-dev |
+File: `/workspace/active_repo/mobile_new/lib/features/upload/presentation/view_models/upload_view_model.dart`
 
-**Overlap note on copy:** frontend-design's body discusses writing as design material ("Words appear in a design for one reason: to make it easier to understand") and covers active voice, label naming, and error/empty-state tone. ux-dev's microcopy section covers the same error/empty-state territory from a structural/UX perspective. The dividing line ux-dev draws is: UX copy = structural element (ux-dev owns); brand voice / personality direction = frontend-design. Any new or revised frontend-design skill definition must not claim UX copy methodology or structural labeling — it may only claim the aesthetic/tone/brand-voice dimension of copy.
+The `pickPhotos()` method on `UploadNotifier`:
+
+```dart
+final picker = ImagePicker();
+final files = await picker.pickMultiImage(imageQuality: 90);
+```
+
+- Uses `image_picker` only — specifically `pickMultiImage()` with `imageQuality: 90`.
+- This opens the OS photo gallery picker (no camera option).
+- After picking, each file's bytes are read to enforce the 20 MB limit (`AppConfig.maxFileSizeBytes`). Files over the limit are collected in `_oversizedFiles` and surfaced to the UI as a snackbar.
+- Passing files are added to state as `PhotoUpload` objects with `status = UploadStatus.idle`.
+
+There is NO camera capture code anywhere in the codebase. No `ImageSource.camera` call exists.
 
 ---
 
-## Files Examined
+## 4. Upload Flow (end-to-end)
 
-- `/home/devuser/.claude/plugins/wills-plugins/plugins/wills-skills/commands/ux-dev/SKILL.md`
-- `/home/devuser/.claude/plugins/marketplaces/claude-plugins-official/plugins/frontend-design/skills/frontend-design/SKILL.md`
-- `/workspace/active_repo/claude-context-plan.md` (for cross-reference with plan-time boundary decisions)
+1. User taps "Pick photos" -> `UploadNotifier.pickPhotos()` -> `image_picker.pickMultiImage()`.
+2. Each picked file becomes a `PhotoUpload(status: idle)` entry in the list.
+3. User taps "Upload" -> `UploadNotifier.uploadAll()` -> iterates idle items -> `_uploadOne(id)`.
+4. Inside `_uploadOne`:
+   a. Status -> `uploading`.
+   b. Read file bytes from disk (`dart:io File.readAsBytes()`).
+   c. Determine content type from extension (jpeg vs png) via `UploadService.contentTypeFor()`.
+   d. POST `{apiBaseUrl}/upload-url` with `{contentType}` -> receive `{jobId, uploadUrl}`.
+   e. PUT bytes to the S3 presigned URL via a separate `Dio` instance (no `Authorization` header).
+   f. Status -> `processing`.
+   g. Poll `GET {apiBaseUrl}/jobs/{jobId}` every 3 s, up to 60 attempts (3 min timeout).
+   h. On `COMPLETE` or `FAILED`, update status accordingly with `ReceiptJob` result or error.
+
+The S3 PUT uses a dedicated `_s3Dio` instance to avoid sending the Bearer token to S3.
+
+---
+
+## 5. Screens and Navigation
+
+Router: `/workspace/active_repo/mobile_new/lib/core/router/app_router.dart`
+
+- `/login` -> `LoginScreen` (shown when not authenticated)
+- `/` -> `UploadScreen` (tab 0, "Upload")
+- `/receipts` -> `ReceiptsScreen` (tab 1, "History")
+
+Navigation uses `StatefulShellRoute.indexedStack` for a persistent bottom `NavigationBar`. Auth state is bridged to `GoRouter` via a `ChangeNotifier` (`_RouterNotifier`) that listens to `authProvider` and triggers a redirect check on every auth state change.
+
+---
+
+## 6. State Management
+
+Riverpod is used throughout. Pattern is consistent: `NotifierProvider` / `AsyncNotifierProvider` with Notifier subclasses.
+
+- `authProvider` (`NotifierProvider<AuthNotifier, AuthState>`) — sealed state: `AuthLoading`, `Unauthenticated`, `Authenticated`.
+- `uploadProvider` (`NotifierProvider<UploadNotifier, List<PhotoUpload>>`) — list of in-progress uploads.
+- `receiptsProvider` (`AsyncNotifierProvider<ReceiptsNotifier, List<ReceiptJob>>`) — async fetch with manual `refresh()`.
+- `apiClientProvider` (`Provider<Dio>`) — shared Dio with auth interceptor; 401 triggers auto sign-out.
+
+---
+
+## 7. Auth Implementation
+
+- Sign-in calls Cognito `InitiateAuth` (USER_PASSWORD_AUTH flow) directly via Dio — no OAuth browser redirect despite `AppConfig` containing OAuth endpoints (those constants appear unused in the current code).
+- Tokens stored in `FlutterSecureStorage` (Android: EncryptedSharedPreferences).
+- Token expiry is checked with a 5-minute buffer; refresh uses `REFRESH_TOKEN_AUTH`.
+- Email is decoded from the JWT payload client-side (no verification — the Lambda does that).
+
+---
+
+## 8. No Camera Code
+
+Confirmed: there is no `ImageSource.camera`, no `camera` package, no `CameraController`, and no camera permission declaration referenced in any Dart file. The only image-sourcing code is `picker.pickMultiImage()` (gallery only).
+
+---
+
+## Files Read
+
+- `/workspace/active_repo/mobile_new/pubspec.yaml`
+- `/workspace/active_repo/mobile_new/lib/main.dart`
+- `/workspace/active_repo/mobile_new/lib/core/router/app_router.dart`
+- `/workspace/active_repo/mobile_new/lib/core/config/app_config.dart`
+- `/workspace/active_repo/mobile_new/lib/core/network/api_client.dart`
+- `/workspace/active_repo/mobile_new/lib/core/theme/app_theme.dart`
+- `/workspace/active_repo/mobile_new/lib/features/upload/presentation/screens/upload_screen.dart`
+- `/workspace/active_repo/mobile_new/lib/features/upload/presentation/view_models/upload_view_model.dart`
+- `/workspace/active_repo/mobile_new/lib/features/upload/data/models/upload_job.dart`
+- `/workspace/active_repo/mobile_new/lib/features/upload/data/services/upload_service.dart`
+- `/workspace/active_repo/mobile_new/lib/features/receipts/presentation/screens/receipts_screen.dart`
+- `/workspace/active_repo/mobile_new/lib/features/receipts/presentation/view_models/receipts_view_model.dart`
+- `/workspace/active_repo/mobile_new/lib/features/receipts/presentation/widgets/receipt_card.dart`
+- `/workspace/active_repo/mobile_new/lib/features/receipts/data/models/receipt.dart`
+- `/workspace/active_repo/mobile_new/lib/features/receipts/data/services/receipts_service.dart`
+- `/workspace/active_repo/mobile_new/lib/features/auth/presentation/screens/login_screen.dart`
+- `/workspace/active_repo/mobile_new/lib/features/auth/presentation/view_models/auth_view_model.dart`
+- `/workspace/active_repo/mobile_new/lib/features/auth/data/models/auth_tokens.dart`
+- `/workspace/active_repo/mobile_new/lib/features/auth/data/repositories/auth_repository.dart`
+- `/workspace/active_repo/mobile_new/lib/features/auth/data/services/auth_service.dart`
