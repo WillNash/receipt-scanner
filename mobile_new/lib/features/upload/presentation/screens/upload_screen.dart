@@ -396,7 +396,7 @@ class _UploadTile extends StatelessWidget {
     return switch (upload.status) {
       UploadStatus.idle => null,
       UploadStatus.uploading => const Text('Uploading…'),
-      UploadStatus.processing => const Text('Processing with Textract…'),
+      UploadStatus.processing => const Text('Processing…'),
       UploadStatus.failed => Text(
           upload.error ?? 'Upload failed.',
           style: TextStyle(color: theme.colorScheme.error),

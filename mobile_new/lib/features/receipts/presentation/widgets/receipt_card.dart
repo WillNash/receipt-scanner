@@ -82,16 +82,37 @@ class _ItemsTable extends StatelessWidget {
           ...items.map(
             (item) => Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Text(item.description,
-                        style: theme.textTheme.bodySmall),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          [
+                            item.description,
+                            if (item.quantity != null && item.unitPrice != null)
+                              '${item.quantity} @ \$${item.unitPrice}',
+                          ].join('  '),
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ),
+                      if (item.price != null)
+                        Text(item.price!,
+                            style: theme.textTheme.bodySmall
+                                ?.copyWith(fontWeight: FontWeight.w500)),
+                    ],
                   ),
-                  if (item.price != null)
-                    Text(item.price!,
-                        style: theme.textTheme.bodySmall
-                            ?.copyWith(fontWeight: FontWeight.w500)),
+                  if (item.discount != null)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: Text(
+                        'Discount: ${item.discount}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.green.shade700,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),

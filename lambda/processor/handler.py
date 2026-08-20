@@ -40,7 +40,7 @@ RECEIPT_TOOL = {
                     },
                     "total": {
                         "type": "string",
-                        "description": "Final total amount paid",
+                        "description": "Final total amount paid, without currency symbol, e.g. '42.50'",
                     },
                     "items": {
                         "type": "array",
@@ -53,23 +53,41 @@ RECEIPT_TOOL = {
                             "properties": {
                                 "description": {
                                     "type": "string",
-                                    "description": "Product name",
+                                    "description": (
+                                        "Product name only. "
+                                        "Do not include quantity, unit price, or totals in this field."
+                                    ),
                                 },
                                 "quantity": {
                                     "type": "string",
-                                    "description": "Quantity purchased, e.g. '4' or '1.5 Kg'",
+                                    "description": (
+                                        "Number of units purchased. "
+                                        "If the receipt shows '2 @ $1.79', quantity is '2'. "
+                                        "For weight-based items e.g. '1.5 Kg @ $2.99/Kg', quantity is '1.5 Kg'."
+                                    ),
                                 },
                                 "unit_price": {
                                     "type": "string",
-                                    "description": "Price per unit, e.g. '1.79'",
+                                    "description": (
+                                        "Price per single unit without currency symbol. "
+                                        "If the receipt shows '2 @ $1.79', unit_price is '1.79'."
+                                    ),
                                 },
                                 "price": {
                                     "type": "string",
-                                    "description": "Line total, e.g. '7.16'",
+                                    "description": (
+                                        "Final line total after any discount, without currency symbol, e.g. '3.00'. "
+                                        "If a discount line follows this item, subtract it here."
+                                    ),
                                 },
                                 "discount": {
                                     "type": "string",
-                                    "description": "Discount amount applied to this line, if any",
+                                    "description": (
+                                        "Discount as a negative number without currency symbol. "
+                                        "If the receipt shows a discount line of '-$0.58' for this item, "
+                                        "discount is '-0.58'. Merge it into this item — do not create a separate item for it. "
+                                        "price should equal (quantity * unit_price) + discount."
+                                    ),
                                 },
                             },
                             "required": ["description"],
@@ -203,7 +221,13 @@ def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None
                             "Extract all data from this receipt. "
                             "Include every purchased product as a line item. "
                             "Exclude summary lines such as subtotal, GST, EFTPOS, cash, and change. "
-                            "Preserve prices exactly as printed. "
+                            "Return all prices and totals without currency symbols. "
+                            "For multi-unit lines like '2 @ $1.79 $3.58', set description to the product name, "
+                            "quantity to '2', unit_price to '1.79', price to '3.58'. "
+                            "If a discount line follows an item (e.g. '-$0.58'), merge it into that item: "
+                            "set discount to '-0.58' (negative) and set price to the amount after the discount is applied. "
+                            "price = (quantity * unit_price) + discount. "
+                            "Do not create a separate line item for discounts. "
                             "Use an empty string for any field you cannot read."
                         )
                     },
@@ -400,7 +424,8 @@ def write_line_items(
 
         def to_n(val):
             try:
-                return {"N": str(float(str(val).replace(",", "")))}
+                cleaned = str(val).replace(",", "").replace("$", "").strip()
+                return {"N": str(float(cleaned))} if cleaned else None
             except (ValueError, TypeError):
                 return None
 
