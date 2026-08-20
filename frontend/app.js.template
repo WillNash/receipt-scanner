@@ -364,7 +364,6 @@ function buildReceiptCard(job) {
     </div>
     ${job.receiptDate ? `<div class="receipt-meta"><span class="receipt-date">${escapeHtml(formatDate(job.receiptDate))}</span></div>` : ""}
     ${itemsHtml}
-    ${job.debugUrl && localStorage.getItem("debug") ? `<div style="margin-top:0.75rem"><a href="${escapeHtml(job.debugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Download raw Textract response</a></div>` : ""}
   `;
   return card;
 }
@@ -400,6 +399,13 @@ function renderHistory(receipts) {
 function buildHistoryCard(job) {
   const card = buildReceiptCard(job);
   if (job.status !== "COMPLETE") return card;
+
+  if (job.debugUrl) {
+    const dl = document.createElement("div");
+    dl.style.cssText = "margin-top:0.5rem";
+    dl.innerHTML = `<a href="${escapeHtml(job.debugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Download raw Textract response</a>`;
+    card.appendChild(dl);
+  }
 
   const editBtn = document.createElement("button");
   editBtn.className = "btn btn-secondary";
