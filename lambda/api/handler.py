@@ -356,27 +356,35 @@ def format_receipt(item: dict) -> dict:
     except (json.JSONDecodeError, TypeError):
         line_items = []
 
-    debug_url = None
-    debug_key = item.get("debug_s3_key", {}).get("S")
-    if debug_key:
-        debug_url = s3.generate_presigned_url(
+    job_id = item["job_id"]["S"]
+
+    def presign(key, filename):
+        return s3.generate_presigned_url(
             "get_object",
-            Params={
-                "Bucket": UPLOADS_BUCKET,
-                "Key": debug_key,
-                "ResponseContentDisposition": f"attachment; filename=textract_{item['job_id']['S']}.json",
-            },
+            Params={"Bucket": UPLOADS_BUCKET, "Key": key,
+                    "ResponseContentDisposition": f"attachment; filename={filename}"},
             ExpiresIn=3600,
         )
 
+    debug_url = None
+    debug_key = item.get("debug_s3_key", {}).get("S")
+    if debug_key:
+        debug_url = presign(debug_key, f"claude_{job_id}.json")
+
+    textract_debug_url = None
+    textract_debug_key = item.get("textract_debug_s3_key", {}).get("S")
+    if textract_debug_key:
+        textract_debug_url = presign(textract_debug_key, f"textract_{job_id}.json")
+
     return {
-        "jobId": item["job_id"]["S"],
+        "jobId": job_id,
         "status": item.get("status", {}).get("S", "UNKNOWN"),
         "vendor": item.get("vendor", {}).get("S"),
         "receiptDate": item.get("receipt_date", {}).get("S"),
         "total": item.get("total", {}).get("S"),
         "items": line_items,
         "debugUrl": debug_url,
+        "textractDebugUrl": textract_debug_url,
         "createdAt": item.get("created_at", {}).get("S"),
         "updatedAt": item.get("updated_at", {}).get("S"),
     }

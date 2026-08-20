@@ -400,10 +400,15 @@ function buildHistoryCard(job) {
   const card = buildReceiptCard(job);
   if (job.status !== "COMPLETE") return card;
 
-  if (job.debugUrl) {
+  if (job.textractDebugUrl || job.debugUrl) {
     const dl = document.createElement("div");
-    dl.style.cssText = "margin-top:0.5rem";
-    dl.innerHTML = `<a href="${escapeHtml(job.debugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Download raw Textract response</a>`;
+    dl.style.cssText = "margin-top:0.5rem;display:flex;gap:0.5rem;flex-wrap:wrap";
+    if (job.textractDebugUrl) {
+      dl.innerHTML += `<a href="${escapeHtml(job.textractDebugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Raw OCR (Textract)</a>`;
+    }
+    if (job.debugUrl) {
+      dl.innerHTML += `<a href="${escapeHtml(job.debugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">AI parsed (Haiku)</a>`;
+    }
     card.appendChild(dl);
   }
 

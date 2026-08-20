@@ -174,6 +174,7 @@ def process_record(record):
             "total": {"S": result["total"]},
             "items": {"S": json.dumps(result["items"])},
             "debug_s3_key": {"S": result["debug_s3_key"]},
+            "textract_debug_s3_key": {"S": result["textract_debug_s3_key"]},
             "image_hash": {"S": image_hash},
             "updated_at": {"S": now_iso()},
             "expires_at": {"N": str(expiry)},
@@ -208,8 +209,8 @@ def _to_jpeg(data: bytes) -> bytes:
     return buf.tobytes()
 
 
-def _textract_lines(image_bytes: bytes) -> str:
-    """Run Textract DetectDocumentText and return lines in reading order.
+def _textract_lines(image_bytes: bytes) -> tuple[str, list[str]]:
+    """Run Textract DetectDocumentText and return (full_text, lines) in reading order.
 
     Groups blocks into rows by proximity then sorts left-to-right within each
     row, producing a layout-aware text representation of the receipt.
@@ -232,7 +233,7 @@ def _textract_lines(image_bytes: bytes) -> str:
 
     lines = ["  ".join(b["Text"] for b in row) for row in rows]
     print(f"TEXTRACT lines={len(lines)}")
-    return "\n".join(lines)
+    return "\n".join(lines), lines
 
 
 def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None = None) -> dict:
@@ -246,7 +247,7 @@ def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None
         raw = image_data or s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         data = _to_jpeg(raw)
 
-    receipt_text = _textract_lines(data)
+    receipt_text, receipt_lines = _textract_lines(data)
 
     response = bedrock.converse(
         modelId=BEDROCK_MODEL_ID,
@@ -295,7 +296,8 @@ def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None
         f"input={usage.get('inputTokens')} output={usage.get('outputTokens')}"
     )
 
-    debug_s3_key = save_debug(job_id, {
+    textract_debug_key = save_debug(job_id, {"lines": receipt_lines}, suffix="_textract")
+    claude_debug_key = save_debug(job_id, {
         "model": BEDROCK_MODEL_ID,
         "extracted": extracted,
         "usage": usage,
@@ -306,12 +308,13 @@ def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None
         "receipt_date": extracted.get("receipt_date") or "",
         "total": extracted.get("total") or "",
         "items": extracted.get("items") or [],
-        "debug_s3_key": debug_s3_key,
+        "debug_s3_key": claude_debug_key,
+        "textract_debug_s3_key": textract_debug_key,
     }
 
 
-def save_debug(job_id: str, payload: dict) -> str:
-    debug_key = f"debug/{job_id}.json"
+def save_debug(job_id: str, payload: dict, suffix: str = "") -> str:
+    debug_key = f"debug/{job_id}{suffix}.json"
     s3.put_object(
         Bucket=S3_BUCKET,
         Key=debug_key,
