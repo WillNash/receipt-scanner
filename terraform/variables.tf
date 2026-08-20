@@ -45,5 +45,5 @@ variable "global_upload_limit" {
 
 variable "bedrock_model_id" {
   type    = string
-  default = "ap.anthropic.claude-3-5-haiku-20241022-v1:0"
+  default = "au.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
