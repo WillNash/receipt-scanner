@@ -69,6 +69,13 @@ resource "aws_iam_role_policy" "lambda_processor" {
         ]
       },
       {
+        # Required by Bedrock to verify/complete Anthropic Marketplace subscription
+        Sid      = "MarketplaceSubscription"
+        Effect   = "Allow"
+        Action   = ["aws-marketplace:ViewSubscriptions", "aws-marketplace:Subscribe"]
+        Resource = "*"
+      },
+      {
         Sid    = "DynamoDBWrite"
         Effect = "Allow"
         Action = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem"]
