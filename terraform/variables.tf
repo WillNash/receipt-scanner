@@ -25,7 +25,7 @@ variable "environment" {
 
 variable "lambda_timeout_processor" {
   type    = number
-  default = 60
+  default = 120
 }
 
 variable "lambda_timeout_api" {

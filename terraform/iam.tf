@@ -41,10 +41,13 @@ resource "aws_iam_role_policy" "lambda_processor" {
         Resource = aws_sqs_queue.image_jobs.arn
       },
       {
-        Sid      = "S3GetUpload"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:DeleteObject"]
-        Resource = "${aws_s3_bucket.uploads.arn}/uploads/*"
+        Sid    = "S3GetUpload"
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:DeleteObject"]
+        Resource = [
+          "${aws_s3_bucket.uploads.arn}/uploads/*",
+          "${aws_s3_bucket.uploads.arn}/cropped/*",
+        ]
       },
       {
         Sid    = "S3CroppedAndDebugWrite"
