@@ -376,6 +376,11 @@ def format_receipt(item: dict) -> dict:
     if textract_debug_key:
         textract_debug_url = presign(textract_debug_key, f"textract_{job_id}.json")
 
+    cropped_image_url = None
+    cropped_key = item.get("cropped_s3_key", {}).get("S")
+    if cropped_key:
+        cropped_image_url = presign(cropped_key, f"cropped_{job_id}.jpg")
+
     return {
         "jobId": job_id,
         "status": item.get("status", {}).get("S", "UNKNOWN"),
@@ -385,6 +390,7 @@ def format_receipt(item: dict) -> dict:
         "items": line_items,
         "debugUrl": debug_url,
         "textractDebugUrl": textract_debug_url,
+        "croppedImageUrl": cropped_image_url,
         "createdAt": item.get("created_at", {}).get("S"),
         "updatedAt": item.get("updated_at", {}).get("S"),
     }

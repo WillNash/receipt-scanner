@@ -400,9 +400,12 @@ function buildHistoryCard(job) {
   const card = buildReceiptCard(job);
   if (job.status !== "COMPLETE") return card;
 
-  if (job.textractDebugUrl || job.debugUrl) {
+  if (job.textractDebugUrl || job.debugUrl || job.croppedImageUrl) {
     const dl = document.createElement("div");
     dl.style.cssText = "margin-top:0.5rem;display:flex;gap:0.5rem;flex-wrap:wrap";
+    if (job.croppedImageUrl) {
+      dl.innerHTML += `<a href="${escapeHtml(job.croppedImageUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Cropped image</a>`;
+    }
     if (job.textractDebugUrl) {
       dl.innerHTML += `<a href="${escapeHtml(job.textractDebugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Raw OCR (Textract)</a>`;
     }
