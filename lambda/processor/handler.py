@@ -32,8 +32,9 @@ FOOTER_RE = re.compile(
 PRICE_TAIL_RE = re.compile(r"\s+\$?([\d,]+\.\d{2})\s*$")
 
 # Discrete qty row with @: "2 @ $3.49 $6.98"
+# Separator is permissive: OCR commonly misreads @ as ₫, à, x, × etc.
 QTY_RE = re.compile(
-    r"^(\d+)\s*[@×xX]\s*\$?([\d.]+)(?:\s+\$?([\d,]+\.\d{2}))?\s*$"
+    r"^(\d+)\s*[^\d\s$,.]\s*\$?([\d.]+)(?:\s+\$?([\d,]+\.\d{2}))?\s*$"
 )
 
 # Weight qty row: "1.976 Kg @ $1.99/Kg $3.93", garbled "1.901 Kgug $3.99/Kg $7.58", or "1.401 Kg à $1.99/Kg $2.79"
