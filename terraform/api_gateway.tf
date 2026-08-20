@@ -212,7 +212,7 @@ resource "aws_api_gateway_integration_response" "receipts_options" {
   }
 }
 
-## DELETE /receipts/{jobId} resource
+## DELETE + PATCH /receipts/{jobId} resource
 
 resource "aws_api_gateway_resource" "receipt_id" {
   rest_api_id = aws_api_gateway_rest_api.main.id
@@ -231,6 +231,22 @@ resource "aws_api_gateway_integration" "receipt_id_delete" {
   rest_api_id             = aws_api_gateway_rest_api.main.id
   resource_id             = aws_api_gateway_resource.receipt_id.id
   http_method             = aws_api_gateway_method.receipt_id_delete.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.api_handler.invoke_arn
+}
+
+resource "aws_api_gateway_method" "receipt_id_patch" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = aws_api_gateway_resource.receipt_id.id
+  http_method   = "PATCH"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "receipt_id_patch" {
+  rest_api_id             = aws_api_gateway_rest_api.main.id
+  resource_id             = aws_api_gateway_resource.receipt_id.id
+  http_method             = aws_api_gateway_method.receipt_id_patch.http_method
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
   uri                     = aws_lambda_function.api_handler.invoke_arn
@@ -272,7 +288,7 @@ resource "aws_api_gateway_integration_response" "receipt_id_options" {
   status_code = aws_api_gateway_method_response.receipt_id_options_200.status_code
   response_parameters = {
     "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"
-    "method.response.header.Access-Control-Allow-Methods" = "'DELETE,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Methods" = "'DELETE,PATCH,OPTIONS'"
     "method.response.header.Access-Control-Allow-Origin"  = "'*'"
   }
 }
@@ -315,6 +331,8 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_resource.receipt_id.id,
       aws_api_gateway_method.receipt_id_delete.id,
       aws_api_gateway_integration.receipt_id_delete.id,
+      aws_api_gateway_method.receipt_id_patch.id,
+      aws_api_gateway_integration.receipt_id_patch.id,
     ]))
   }
 
@@ -330,6 +348,7 @@ resource "aws_api_gateway_deployment" "main" {
     aws_api_gateway_integration.receipts_get,
     aws_api_gateway_integration.receipts_options,
     aws_api_gateway_integration.receipt_id_delete,
+    aws_api_gateway_integration.receipt_id_patch,
     aws_api_gateway_integration.receipt_id_options,
   ]
 }

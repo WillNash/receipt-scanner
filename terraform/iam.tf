@@ -130,9 +130,9 @@ resource "aws_iam_role_policy" "lambda_api" {
         Resource = aws_dynamodb_table.image_hashes.arn
       },
       {
-        Sid    = "LineItemsDelete"
+        Sid    = "LineItemsAccess"
         Effect = "Allow"
-        Action = ["dynamodb:Query", "dynamodb:BatchWriteItem"]
+        Action = ["dynamodb:Query", "dynamodb:BatchWriteItem", "dynamodb:UpdateItem"]
         Resource = [
           aws_dynamodb_table.line_items.arn,
           "${aws_dynamodb_table.line_items.arn}/index/*",

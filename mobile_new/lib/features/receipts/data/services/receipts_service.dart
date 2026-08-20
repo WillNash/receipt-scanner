@@ -21,4 +21,21 @@ class ReceiptsService {
   Future<void> deleteReceipt(String jobId) async {
     await _dio.delete<void>('${AppConfig.apiBaseUrl}/receipts/$jobId');
   }
+
+  Future<ReceiptJob> editReceipt(
+    String jobId, {
+    String? vendor,
+    String? receiptDate,
+    List<Map<String, String>>? items,
+  }) async {
+    final response = await _dio.patch<Map<String, dynamic>>(
+      '${AppConfig.apiBaseUrl}/receipts/$jobId',
+      data: {
+        if (vendor != null) 'vendor': vendor,
+        if (receiptDate != null) 'receiptDate': receiptDate,
+        if (items != null) 'items': items,
+      },
+    );
+    return ReceiptJob.fromJson(response.data!);
+  }
 }

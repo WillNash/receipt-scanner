@@ -41,4 +41,24 @@ class ReceiptsNotifier extends AsyncNotifier<List<ReceiptJob>> {
       rethrow;
     }
   }
+
+  Future<void> edit(
+    String jobId, {
+    String? vendor,
+    String? receiptDate,
+    List<Map<String, String>>? items,
+  }) async {
+    final updated = await ref.read(_receiptsServiceProvider).editReceipt(
+          jobId,
+          vendor: vendor,
+          receiptDate: receiptDate,
+          items: items,
+        );
+    final current = state.value;
+    if (current == null) return;
+    state = AsyncData([
+      for (final r in current)
+        if (r.jobId == jobId) updated else r,
+    ]);
+  }
 }

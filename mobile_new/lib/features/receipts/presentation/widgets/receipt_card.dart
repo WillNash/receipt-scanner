@@ -3,10 +3,11 @@ import 'package:flutter/material.dart';
 import '../../data/models/receipt.dart';
 
 class ReceiptCard extends StatelessWidget {
-  const ReceiptCard({super.key, required this.job, this.onDelete});
+  const ReceiptCard({super.key, required this.job, this.onDelete, this.onEdit});
 
   final ReceiptJob job;
   final VoidCallback? onDelete;
+  final VoidCallback? onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -49,6 +50,17 @@ class ReceiptCard extends StatelessWidget {
             )
           else
             _ItemsTable(items: job.items),
+          Padding(
+            padding: const EdgeInsets.only(left: 8, right: 8, bottom: 8),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                icon: const Icon(Icons.edit_outlined, size: 16),
+                label: const Text('Edit'),
+                onPressed: onEdit,
+              ),
+            ),
+          ),
         ],
       ),
     );
