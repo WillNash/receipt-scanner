@@ -47,17 +47,17 @@ resource "aws_iam_role_policy" "lambda_processor" {
         Resource = "${aws_s3_bucket.uploads.arn}/uploads/*"
       },
       {
-        # AnalyzeDocument does not support resource-level restrictions
-        Sid      = "TextractAnalyzeDocument"
-        Effect   = "Allow"
-        Action   = "textract:AnalyzeDocument"
-        Resource = "*"
-      },
-      {
         Sid      = "S3DebugWrite"
         Effect   = "Allow"
         Action   = "s3:PutObject"
         Resource = "${aws_s3_bucket.uploads.arn}/debug/*"
+      },
+      {
+        # Converse API requires bedrock:InvokeModel on the foundation model resource
+        Sid      = "BedrockInvokeModel"
+        Effect   = "Allow"
+        Action   = "bedrock:InvokeModel"
+        Resource = "arn:aws:bedrock:${var.primary_region}::foundation-model/*"
       },
       {
         Sid    = "DynamoDBWrite"

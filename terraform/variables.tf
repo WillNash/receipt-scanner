@@ -42,3 +42,8 @@ variable "global_upload_limit" {
   type    = number
   default = 100
 }
+
+variable "bedrock_model_id" {
+  type    = string
+  default = "amazon.nova-lite-v1:0"
+}
