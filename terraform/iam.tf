@@ -117,10 +117,25 @@ resource "aws_iam_role_policy" "lambda_api" {
       {
         Sid    = "DynamoDBReadWrite"
         Effect = "Allow"
-        Action = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem"]
+        Action = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"]
         Resource = [
           aws_dynamodb_table.jobs.arn,
           "${aws_dynamodb_table.jobs.arn}/index/*",
+        ]
+      },
+      {
+        Sid    = "ImageHashesDelete"
+        Effect = "Allow"
+        Action = ["dynamodb:GetItem", "dynamodb:DeleteItem"]
+        Resource = aws_dynamodb_table.image_hashes.arn
+      },
+      {
+        Sid    = "LineItemsDelete"
+        Effect = "Allow"
+        Action = ["dynamodb:Query", "dynamodb:BatchWriteItem"]
+        Resource = [
+          aws_dynamodb_table.line_items.arn,
+          "${aws_dynamodb_table.line_items.arn}/index/*",
         ]
       },
       {

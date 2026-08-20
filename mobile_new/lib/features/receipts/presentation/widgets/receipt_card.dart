@@ -3,9 +3,10 @@ import 'package:flutter/material.dart';
 import '../../data/models/receipt.dart';
 
 class ReceiptCard extends StatelessWidget {
-  const ReceiptCard({super.key, required this.job});
+  const ReceiptCard({super.key, required this.job, this.onDelete});
 
   final ReceiptJob job;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -13,7 +14,7 @@ class ReceiptCard extends StatelessWidget {
 
     return Card(
       child: ExpansionTile(
-        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        tilePadding: const EdgeInsets.only(left: 16, right: 4, top: 4, bottom: 4),
         title: Text(
           job.vendor ?? 'Unknown vendor',
           style: theme.textTheme.titleMedium,
@@ -25,7 +26,21 @@ class ReceiptCard extends StatelessWidget {
           ].join('  ·  '),
           style: theme.textTheme.bodySmall,
         ),
-        trailing: _statusChip(theme),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _statusChip(theme),
+            const SizedBox(width: 4),
+            IconButton(
+              icon: Icon(Icons.delete_outline,
+                  size: 20, color: theme.colorScheme.error),
+              tooltip: 'Delete',
+              onPressed: onDelete,
+            ),
+            const Icon(Icons.expand_more, size: 20),
+            const SizedBox(width: 4),
+          ],
+        ),
         children: [
           if (job.items.isEmpty)
             const Padding(

@@ -212,6 +212,71 @@ resource "aws_api_gateway_integration_response" "receipts_options" {
   }
 }
 
+## DELETE /receipts/{jobId} resource
+
+resource "aws_api_gateway_resource" "receipt_id" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  parent_id   = aws_api_gateway_resource.receipts.id
+  path_part   = "{jobId}"
+}
+
+resource "aws_api_gateway_method" "receipt_id_delete" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = aws_api_gateway_resource.receipt_id.id
+  http_method   = "DELETE"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "receipt_id_delete" {
+  rest_api_id             = aws_api_gateway_rest_api.main.id
+  resource_id             = aws_api_gateway_resource.receipt_id.id
+  http_method             = aws_api_gateway_method.receipt_id_delete.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.api_handler.invoke_arn
+}
+
+resource "aws_api_gateway_method" "receipt_id_options" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  resource_id   = aws_api_gateway_resource.receipt_id.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "receipt_id_options" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  resource_id = aws_api_gateway_resource.receipt_id.id
+  http_method = aws_api_gateway_method.receipt_id_options.http_method
+  type        = "MOCK"
+  request_templates = {
+    "application/json" = "{\"statusCode\": 200}"
+  }
+}
+
+resource "aws_api_gateway_method_response" "receipt_id_options_200" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  resource_id = aws_api_gateway_resource.receipt_id.id
+  http_method = aws_api_gateway_method.receipt_id_options.http_method
+  status_code = "200"
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Origin"  = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "receipt_id_options" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  resource_id = aws_api_gateway_resource.receipt_id.id
+  http_method = aws_api_gateway_method.receipt_id_options.http_method
+  status_code = aws_api_gateway_method_response.receipt_id_options_200.status_code
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"
+    "method.response.header.Access-Control-Allow-Methods" = "'DELETE,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+  }
+}
+
 ## Gateway-level responses — add CORS headers to API Gateway's own error responses
 ## (throttling, auth failures, etc.) so browsers don't see an opaque network error
 
@@ -247,6 +312,9 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_resource.receipts.id,
       aws_api_gateway_method.receipts_get.id,
       aws_api_gateway_integration.receipts_get.id,
+      aws_api_gateway_resource.receipt_id.id,
+      aws_api_gateway_method.receipt_id_delete.id,
+      aws_api_gateway_integration.receipt_id_delete.id,
     ]))
   }
 
@@ -261,6 +329,8 @@ resource "aws_api_gateway_deployment" "main" {
     aws_api_gateway_integration.job_id_options,
     aws_api_gateway_integration.receipts_get,
     aws_api_gateway_integration.receipts_options,
+    aws_api_gateway_integration.receipt_id_delete,
+    aws_api_gateway_integration.receipt_id_options,
   ]
 }
 

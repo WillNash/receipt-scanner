@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 
 import '../../../../core/config/app_config.dart';
 import '../../../receipts/data/models/receipt.dart';
+import '../models/upload_job.dart';
 
 class UploadService {
   UploadService(this._apiDio) : _s3Dio = Dio();
@@ -13,17 +14,28 @@ class UploadService {
   final Dio _s3Dio;
 
   Future<({String jobId, String uploadUrl})> requestUploadUrl(
-    String contentType,
-  ) async {
-    final response = await _apiDio.post<Map<String, dynamic>>(
-      '${AppConfig.apiBaseUrl}/upload-url',
-      data: {'contentType': contentType},
-    );
-    final body = response.data!;
-    return (
-      jobId: body['jobId'] as String,
-      uploadUrl: body['uploadUrl'] as String,
-    );
+    String contentType, {
+    String? imageHash,
+  }) async {
+    try {
+      final response = await _apiDio.post<Map<String, dynamic>>(
+        '${AppConfig.apiBaseUrl}/upload-url',
+        data: {
+          'contentType': contentType,
+          if (imageHash != null) 'imageHash': imageHash,
+        },
+      );
+      final body = response.data!;
+      return (
+        jobId: body['jobId'] as String,
+        uploadUrl: body['uploadUrl'] as String,
+      );
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 409) {
+        throw const DuplicateImageException();
+      }
+      rethrow;
+    }
   }
 
   Future<void> uploadToS3(
@@ -52,7 +64,7 @@ class UploadService {
       );
       final job = ReceiptJob.fromJson(response.data!);
 
-      if (job.status == 'COMPLETE' || job.status == 'FAILED') return job;
+      if (job.isComplete || job.isFailed || job.isDuplicate) return job;
     }
     return null; // timed out
   }
