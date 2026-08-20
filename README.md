@@ -1,47 +1,69 @@
 # Receipt Scanner
 
-A demo web application that lets authenticated users upload receipt images and have them scanned using [Amazon Textract](https://aws.amazon.com/textract/) (`AnalyzeExpense`). Results include the vendor name, date, total, and a line-item breakdown. Multiple receipts can be uploaded and scanned in parallel.
+A demo web application and Flutter mobile app that lets authenticated users upload receipt photos and extract structured data from them. Results include vendor name, date, total, and a per-line-item breakdown with quantities, unit prices, and discounts.
+
+## How it works
+
+Processing uses a two-stage pipeline:
+
+1. **Receipt crop** — OpenCV detects and crops the receipt from the photo using three methods tried in priority order: bright-region detection (white receipt on coloured background), Canny edge contours (general case), and MSER text-density (fallback). The crop is stored in S3.
+2. **OCR** — Amazon Textract `DetectDocumentText` extracts the raw text lines from the cropped image, preserving reading order and spatial layout.
+3. **Reasoning** — Claude Haiku 4.5 (Amazon Bedrock, cross-region inference) receives the Textract text and returns structured JSON via tool use: vendor, date, total, and per-item description, quantity, unit price, price, and discount.
+
+**Cost per receipt:** ~$0.01 (Textract $0.0015 + Haiku input/output tokens ~$0.008).
 
 ## Architecture
 
 ```
-Browser
+Browser / Flutter app
   │
   ├── CloudFront ──► S3 (static frontend)
   │
-  ├── API Gateway ──► Lambda (api) ──► DynamoDB   (presigned URL, job status, receipt history)
+  ├── API Gateway ──► Lambda (api) ──► DynamoDB   (presigned URL, job status, receipt history, edit)
   │
-  └── S3 presigned PUT ──► S3 (uploads)
+  └── S3 presigned PUT ──► S3 uploads/
                                 │
-                           S3 event notification
+                           S3 event (uploads/ prefix only)
                                 │
                                SQS
                                 │
-                           Lambda (processor) ──► Textract AnalyzeExpense
-                                │                 (ap-southeast-2)
-                                └──► DynamoDB     (write result)
+                           Lambda (processor)
+                                ├── OpenCV crop ──► S3 cropped/
+                                ├── Textract DetectDocumentText
+                                ├── Bedrock Claude Haiku 4.5
+                                └── DynamoDB (jobs, line_items, image_hashes)
 ```
 
-**All infrastructure runs in `ap-southeast-2` (Sydney).** Textract is called in the same region as the uploads bucket — no cross-region routing required.
+**All infrastructure runs in `ap-southeast-2` (Sydney).** Bedrock calls route via the `au.` cross-region inference profile to the nearest supported region.
 
-### AWS services used
+### AWS services
 
 | Service | Purpose |
 |---|---|
 | CloudFront + S3 | Static frontend hosting |
 | Cognito | User authentication (hosted UI, OAuth2 code flow) |
-| API Gateway | REST API (`POST /upload-url`, `GET /jobs/{jobId}`, `GET /receipts`) |
-| Lambda (api) | Presigned URL generation, JWT validation, job polling, receipt history |
-| Lambda (processor) | Textract inference, result storage |
-| S3 (uploads) | Temporary image storage |
-| SQS | Decouples S3 upload events from Lambda processing |
-| DynamoDB | Job status and results (with GSI for per-user receipt history) |
-| Textract | `AnalyzeExpense` — extracts vendor, date, total, and line items |
+| API Gateway | REST API (`POST /upload-url`, `GET /jobs/{jobId}`, `GET /receipts`, `PATCH /receipts/{jobId}`) |
+| Lambda (api) | Presigned URL generation, JWT validation, job polling, receipt history, edit |
+| Lambda (processor) | Receipt crop, Textract OCR, Bedrock reasoning, result storage |
+| S3 (uploads) | Image storage (`uploads/`, `cropped/`, `debug/` prefixes) |
+| SQS | Decouples S3 upload events from Lambda processing; prevents duplicate processing |
+| DynamoDB | Three tables: `jobs` (status + results), `line_items` (per-item analytics), `image_hashes` (dedup) |
+| Textract | `DetectDocumentText` — accurate OCR optimised for degraded/low-contrast receipts |
+| Bedrock | Claude Haiku 4.5 (`au.anthropic.claude-haiku-4-5-20251001-v1:0`) — structured data extraction and reasoning |
 | IAM | Least-privilege roles for both Lambda functions |
+
+### DynamoDB tables
+
+| Table | PK / SK | Notes |
+|---|---|---|
+| `{project_name}-jobs` | PK: `job_id`; GSI: `user_id` + `created_at` | Job status, results, and rate-limit counters |
+| `{project_name}-image-hashes` | PK: `user_id`, SK: `image_hash` | Duplicate image detection |
+| `{project_name}-line-items` | PK: `user_id`, SK: `item_sk`; GSI: `desc_created` | Per-line-item analytics |
 
 ## Prerequisites
 
 - An AWS account with permissions to create the resources above
+- Anthropic Claude Haiku 4.5 access enabled via AWS Marketplace in your account
 - Python 3.11+ on your local machine
 - Internet access (to download Terraform and AWS CLI)
 
@@ -49,17 +71,12 @@ Browser
 
 ### 1. Install tools
 
-Run once. No `sudo` required — everything installs into `~/.local/`.
-
 ```bash
 bash scripts/install_tools.sh
 export PATH="$HOME/.local/bin:$HOME/.local/venv/bin:$PATH"
 ```
 
-This installs:
-- Terraform 1.9.8
-- AWS CLI v2
-- Python dependencies (boto3, python-jose) into a local venv
+Installs Terraform 1.9.8, AWS CLI v2, and Python dependencies into `~/.local/`.
 
 ### 2. Configure AWS credentials
 
@@ -67,10 +84,9 @@ This installs:
 export AWS_ACCESS_KEY_ID="your-key-id"
 export AWS_SECRET_ACCESS_KEY="your-secret-key"
 export AWS_DEFAULT_REGION="ap-southeast-2"
-# If using temporary credentials (SSO, assumed role):
+# If using temporary credentials:
 export AWS_SESSION_TOKEN="your-session-token"
 
-# Verify
 aws sts get-caller-identity
 ```
 
@@ -89,7 +105,7 @@ environment           = "demo"
 EOF
 ```
 
-The Cognito domain prefix must be globally unique across all AWS accounts. If Terraform fails with a domain conflict, change `cognito_domain_prefix` to something unique and re-apply.
+The Cognito domain prefix must be globally unique. If Terraform fails with a domain conflict, change `cognito_domain_prefix` and re-apply.
 
 ### 4. Deploy
 
@@ -97,12 +113,10 @@ The Cognito domain prefix must be globally unique across all AWS accounts. If Te
 make deploy
 ```
 
-This runs in sequence:
-1. `scripts/package_lambdas.sh` — builds Lambda deployment packages
+Runs in sequence:
+1. `scripts/package_lambdas.sh` — builds Lambda deployment packages (processor zip goes via S3 due to opencv-python-headless size)
 2. `terraform init && terraform apply` — provisions all AWS infrastructure (~10–15 min; CloudFront creation is the slowest step)
-3. `scripts/inject_config.py` — reads Terraform outputs, injects them into the frontend, and syncs to S3
-
-When complete, the app URL is printed:
+3. `scripts/inject_config.py` — injects Terraform outputs into the frontend and Flutter config, syncs to S3
 
 ```
 Done! App live at: https://d1234abcd.cloudfront.net/
@@ -114,126 +128,113 @@ Done! App live at: https://d1234abcd.cloudfront.net/
 make smoke
 ```
 
-Checks that CloudFront returns HTTP 200 and the API returns HTTP 401 (no auth — confirms Lambda is reachable and Cognito enforcement is active). Prints the login URL for manual browser testing.
+Checks CloudFront returns HTTP 200 and the API returns HTTP 401 (auth required).
 
 ## Usage
 
-Open the CloudFront URL printed at the end of `make deploy`.
+### Web
 
-1. You are redirected to the Cognito hosted UI — register an account or sign in
-2. After login you are redirected back to the upload page
-3. Drop or select one or more receipt images (JPEG or PNG, max 5 MB each)
-4. Click **Scan receipts**
-5. All receipts are uploaded and scanned in parallel — status updates every 3 seconds
-6. Each completed receipt displays vendor, date, total, and a line-item table
-7. Previous receipts appear in the **Recent receipts** history section below
+1. Open the CloudFront URL and sign in via Cognito
+2. Upload one or more receipt photos (JPEG, PNG, or HEIC, max 20 MB each)
+3. Processing takes ~10–30 seconds — status updates automatically
+4. Completed receipts show vendor, date, total, and line items
+5. Each history card has download buttons: **Cropped image**, **Raw OCR (Textract)**, and **AI parsed (Haiku)** for debugging
+6. Receipts can be edited (vendor, date, line items) via the Edit button
 
-To share the demo with others, send them the CloudFront URL. Each person registers their own Cognito account and can only see their own receipts.
+### Rate limits
+
+| Scope | Limit |
+|---|---|
+| Daily uploads per user | 50 |
+| Global uploads (all users) | 100 |
+
+### Debugging
+
+The history page shows three download buttons per receipt:
+- **Cropped image** — the OpenCV-cropped JPEG sent to Textract
+- **Raw OCR (Textract)** — the text lines extracted by Textract, in reading order
+- **AI parsed (Haiku)** — the structured JSON returned by Claude Haiku 4.5
+
+If items are missing, start with the cropped image to confirm the crop captured the full receipt, then check the Raw OCR file to see if Textract read the missing lines.
 
 ## Project structure
 
 ```
 receipt-scanner/
-├── Makefile                        # deploy, plan, smoke, destroy targets
+├── Makefile
 ├── scripts/
-│   ├── install_tools.sh            # one-time tool installation
-│   ├── package_lambdas.sh          # build Lambda deployment packages
-│   ├── inject_config.py            # inject Terraform outputs into frontend
-│   └── smoke_test.py               # post-deploy sanity checks
+│   ├── install_tools.sh
+│   ├── package_lambdas.sh
+│   ├── inject_config.py
+│   ├── smoke_test.py
+│   ├── export_receipts.py          # dump jobs table to CSV
+│   └── visualize_textract.py       # overlay Textract bounding boxes on image
 ├── terraform/
-│   ├── providers.tf                # AWS provider, ap-southeast-2
+│   ├── providers.tf
 │   ├── variables.tf
 │   ├── outputs.tf
-│   ├── cognito.tf                  # user pool, hosted UI, app client
-│   ├── s3.tf                       # frontend bucket (OAC) + uploads bucket (CORS)
-│   ├── cloudfront.tf               # distribution with OAC and SPA error handling
+│   ├── cognito.tf
+│   ├── s3.tf                       # frontend bucket + uploads bucket (CORS)
+│   ├── cloudfront.tf
 │   ├── sqs.tf                      # main queue (360s visibility) + DLQ
-│   ├── dynamodb.tf                 # jobs table, PAY_PER_REQUEST, TTL, user GSI
-│   ├── iam.tf                      # least-privilege roles for both Lambdas
-│   ├── lambda.tf                   # processor + api functions, SQS ESM
-│   ├── api_gateway.tf              # REST API, CORS, gateway responses
+│   ├── dynamodb.tf                 # jobs, line_items, image_hashes tables
+│   ├── iam.tf
+│   ├── lambda.tf
+│   ├── api_gateway.tf
 │   └── terraform.tfvars.example
 ├── lambda/
 │   ├── processor/
-│   │   ├── handler.py              # SQS consumer → Textract AnalyzeExpense → DynamoDB
-│   │   └── requirements.txt
+│   │   ├── handler.py              # SQS consumer → crop → Textract → Bedrock → DynamoDB
+│   │   └── requirements.txt        # opencv-python-headless, boto3
 │   └── api/
-│       ├── handler.py              # presigned URL, job polling, receipt history, JWT validation
+│       ├── handler.py              # presigned URLs, job polling, history, edit, JWT validation
 │       └── requirements.txt        # python-jose[cryptography]
-└── frontend/
-    ├── index.html
-    ├── app.js.template             # source of truth — placeholders injected at deploy
-    └── styles.css
+├── frontend/
+│   ├── index.html
+│   ├── app.js.template             # source of truth — placeholders injected at deploy time
+│   └── styles.css
+└── mobile_new/                     # Flutter iOS/Android app
+    └── lib/
+        ├── features/
+        │   ├── auth/               # Cognito PKCE via flutter_appauth
+        │   ├── upload/             # camera, gallery picker, saved captures, upload queue
+        │   └── receipts/           # history, pull-to-refresh, edit sheet
+        └── ...
 ```
 
-> `frontend/app.js` and `terraform/terraform.tfvars` are generated files and are `.gitignore`d.
+> `frontend/app.js` and `terraform/terraform.tfvars` are generated and `.gitignore`d.
 
-## Flutter Android app
+## Flutter mobile app
 
-An Android app lives in `mobile/`. It connects to the same AWS backend — pick receipt photos from your gallery, upload them, and view results and history directly on your phone. No web browser required.
+The Flutter app in `mobile_new/` connects to the same AWS backend.
 
-### App structure
+**Features:**
+- Sign in via Cognito hosted UI (PKCE flow)
+- Take photos with the camera — saved to a local `receipt-scanner-images/` folder
+- Pick from the device gallery
+- Pick from previously taken captures (the Saved tab); processed captures move to a `processed/` subfolder automatically and are restored if the receipt is deleted
+- Long-press a saved capture to delete it from the device
+- Upload queue with per-item status (uploading → processing → complete/duplicate/failed)
+- Receipt history with line items, quantities, unit prices, and discounts
+- Edit vendor, date, and line items inline
 
-```
-mobile/
-├── lib/
-│   ├── main.dart
-│   ├── core/
-│   │   ├── config/app_config.dart      # ← fill in after deploy (API URL + Cognito client ID)
-│   │   ├── network/api_client.dart     # Dio + auto Bearer token injection
-│   │   ├── router/app_router.dart      # GoRouter, auth-gated redirect
-│   │   └── theme/app_theme.dart
-│   └── features/
-│       ├── auth/                       # Cognito PKCE via flutter_appauth, tokens encrypted on device
-│       ├── upload/                     # multi-photo picker → presigned S3 PUT → Textract poll
-│       └── receipts/                   # receipt history (GET /receipts), pull-to-refresh
-└── android/                            # standard Flutter Android project
-```
+**Setup:**
 
-### Getting it on your phone
-
-**Prerequisites:** [Flutter SDK](https://docs.flutter.dev/get-started/install) (stable, 3.22+) and Android SDK.
-
-**1. Deploy** (generates `mobile/lib/core/config/app_config.dart` automatically):
+`make deploy` automatically injects the API URL and Cognito client ID into `mobile_new/lib/core/config/app_config.dart`.
 
 ```bash
-make deploy
-```
-
-`make deploy` now injects the API URL and Cognito client ID into the Flutter config in the same pass it configures the web frontend — no manual copy-pasting required.
-
-**2. Build the APK:**
-
-```bash
-cd mobile
+cd mobile_new
 flutter pub get
-flutter build apk --release
+flutter run          # connected device or simulator
+flutter build apk    # Android release APK
+flutter build ipa    # iOS (requires Xcode)
 ```
-
-**5. Install on your Android phone** — either via USB:
-
-```bash
-adb install build/app/outputs/flutter-apk/app-release.apk
-```
-
-Or copy the APK to your phone via USB or Google Drive, tap it, and allow "Install unknown apps" when prompted (a one-time Android setting).
-
-### App flow
-
-1. **Login** — opens the Cognito hosted UI in the system browser; redirects back to the app automatically after sign-in
-2. **Upload tab** — pick one or more receipt photos from your gallery, then tap Upload; results (vendor, date, total, line items) appear inline as each receipt finishes processing
-3. **History tab** — your 20 most recent receipts; pull down to refresh
 
 ## Re-deploying after changes
 
-**Terraform or Lambda changes:**
 ```bash
-make deploy
-```
-
-**Frontend-only changes:**
-```bash
-python3 scripts/inject_config.py
+make deploy           # Terraform + Lambda + frontend
+python3 scripts/inject_config.py   # frontend-only changes
 ```
 
 ## Teardown
@@ -242,50 +243,15 @@ python3 scripts/inject_config.py
 make destroy
 ```
 
-Destroys all AWS resources. S3 buckets must be empty first — empty them manually or add `force_destroy = true` to both bucket resources in `terraform/s3.tf` before running destroy.
-
-## Rate limiting
-
-API Gateway throttling is applied at two levels:
-
-| Scope | Limit | Why |
-|---|---|---|
-| All methods (combined) | 10 req/s, burst 20 | Hard cap on total API traffic — returns HTTP 429 when exceeded |
-| `POST /upload-url` only | 2 req/s, burst 5 | Tighter limit since each call triggers a Textract analysis job |
-
-This is stage-level (aggregate across all callers). For per-IP isolation add WAF with a rate-based rule (~$6/month):
-
-```hcl
-# terraform/waf.tf
-resource "aws_wafv2_web_acl" "api" {
-  name  = "${var.project_name}-waf"
-  scope = "REGIONAL"
-  ...
-  rule {
-    name     = "rate-limit-per-ip"
-    priority = 1
-    action { block {} }
-    statement {
-      rate_based_statement {
-        limit              = 100   # requests per 5-minute window per IP
-        aggregate_key_type = "IP"
-      }
-    }
-  }
-}
-
-resource "aws_wafv2_web_acl_association" "api" {
-  resource_arn = aws_api_gateway_stage.main.arn
-  web_acl_arn  = aws_wafv2_web_acl.api.arn
-}
-```
+S3 buckets must be empty first — empty them manually in the console, or add `force_destroy = true` to both bucket resources in `terraform/s3.tf` before running destroy.
 
 ## Known limitations
 
 | Limitation | Detail |
 |---|---|
-| Image formats | JPEG and PNG only — Textract `AnalyzeExpense` does not support GIF or WebP. |
-| Image size | Max 5 MB per image. |
-| Receipt quality | Textract accuracy depends on image clarity. Poor lighting or low resolution will reduce field extraction quality. |
-| Processing time | Typically 5–20 seconds end-to-end depending on Textract latency. |
-| Receipt history | Shows the 20 most recent completed receipts per user (DynamoDB GSI with `Limit=20`). |
+| Image formats | JPEG, PNG, HEIC (HEIC is converted to JPEG before processing) |
+| Image size | Max 20 MB per upload |
+| Bedrock availability | Claude Haiku 4.5 requires AWS Marketplace subscription and Anthropic use case form submission |
+| Processing time | Typically 10–30 seconds (crop + Textract + Bedrock round-trip) |
+| Receipt history | Shows the 20 most recent completed receipts per user |
+| Duplicate detection | Based on SHA-256 hash of the original image — re-uploads of the same photo are marked DUPLICATE and not reprocessed |
