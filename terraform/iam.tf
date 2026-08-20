@@ -47,10 +47,13 @@ resource "aws_iam_role_policy" "lambda_processor" {
         Resource = "${aws_s3_bucket.uploads.arn}/uploads/*"
       },
       {
-        Sid      = "S3DebugWrite"
-        Effect   = "Allow"
-        Action   = "s3:PutObject"
-        Resource = "${aws_s3_bucket.uploads.arn}/debug/*"
+        Sid    = "S3CroppedAndDebugWrite"
+        Effect = "Allow"
+        Action = "s3:PutObject"
+        Resource = [
+          "${aws_s3_bucket.uploads.arn}/debug/*",
+          "${aws_s3_bucket.uploads.arn}/cropped/*",
+        ]
       },
       {
         # Converse API requires bedrock:InvokeModel on the foundation model resource

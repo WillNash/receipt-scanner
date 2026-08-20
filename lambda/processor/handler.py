@@ -178,8 +178,12 @@ def process_record(record):
 def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None = None) -> dict:
     crop_receipt(bucket, key, image_data=image_data)
 
-    # Re-read after potential crop
-    data = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+    # Use cropped version if it exists, otherwise fall back to original
+    cropped_key = key.replace("uploads/", "cropped/", 1)
+    try:
+        data = s3.get_object(Bucket=bucket, Key=cropped_key)["Body"].read()
+    except s3.exceptions.NoSuchKey:
+        data = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
     fmt = "png" if key.lower().endswith(".png") else "jpeg"
 
     response = bedrock.converse(
@@ -339,9 +343,11 @@ def crop_receipt(bucket: str, key: str, image_data: bytes | None = None) -> None
             f"CROP {w}x{h} -> {right-left}x{lower-upper} "
             f"{len(data)//1024}KB -> {len(cropped_bytes)//1024}KB ({pixel_ratio:.0%} area)"
         )
+        # Write to cropped/ prefix, not uploads/, to avoid re-triggering the S3 event
+        cropped_key = key.replace("uploads/", "cropped/", 1)
         s3.put_object(
             Bucket=bucket,
-            Key=key,
+            Key=cropped_key,
             Body=cropped_bytes,
             ContentType="image/jpeg" if is_jpeg else "image/png",
         )
