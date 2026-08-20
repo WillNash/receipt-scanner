@@ -33,6 +33,13 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
     return dir;
   }
 
+  Future<Directory> _getProcessedDir() async {
+    final docs = await getApplicationDocumentsDirectory();
+    final dir = Directory('${docs.path}/$_savedFolderName/processed');
+    if (!await dir.exists()) await dir.create(recursive: true);
+    return dir;
+  }
+
   Future<void> pickPhotos() async {
     final picker = ImagePicker();
     final files = await picker.pickMultiImage(imageQuality: 90);
@@ -193,6 +200,18 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
             status: UploadStatus.complete,
             result: result,
           ));
+
+      // Move saved capture to processed/ now that the job is confirmed complete
+      try {
+        final savedDir = await _getSavedDir();
+        if (filePath.startsWith(savedDir.path)) {
+          final processedDir = await _getProcessedDir();
+          final filename = filePath.split('/').last;
+          await File(filePath).rename('${processedDir.path}/${jobId}_$filename');
+        }
+      } catch (_) {
+        // Non-fatal — photo stays in active folder if move fails
+      }
     } on DuplicateImageException {
       _update(id, (u) => u.copyWith(
             status: UploadStatus.duplicate,

@@ -28,7 +28,7 @@ s3 = boto3.client(
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
-    "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,DELETE,PATCH,OPTIONS",
     "Content-Type": "application/json",
 }
 
@@ -76,6 +76,10 @@ def lambda_handler(event, context):
     elif method == "DELETE" and "/receipts/" in path:
         job_id = (event.get("pathParameters") or {}).get("jobId")
         return handle_delete_receipt(job_id, user_id)
+    elif method == "PATCH" and "/receipts/" in path:
+        job_id = (event.get("pathParameters") or {}).get("jobId")
+        body = json.loads(event.get("body") or "{}")
+        return handle_edit_receipt(job_id, user_id, body)
     else:
         return make_response(404, {"error": "Not found"})
 
@@ -260,6 +264,91 @@ def handle_delete_receipt(job_id: str | None, user_id: str):
     return make_response(200, {"deleted": True})
 
 
+def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
+    if not job_id:
+        return make_response(400, {"error": "jobId required"})
+
+    result = dynamodb.get_item(
+        TableName=DYNAMODB_TABLE,
+        Key={"job_id": {"S": job_id}},
+    )
+    item = result.get("Item")
+    if not item:
+        return make_response(404, {"error": "Job not found"})
+    if item.get("user_id", {}).get("S") != user_id:
+        return make_response(403, {"error": "Forbidden"})
+
+    updates = {"updated_at": {"S": now_iso()}}
+
+    if "vendor" in body:
+        updates["vendor"] = {"S": str(body["vendor"])}
+
+    if "receiptDate" in body:
+        updates["receipt_date"] = {"S": str(body["receiptDate"])}
+
+    new_item_patches = body.get("items")  # list of {"description": "..."}
+    if new_item_patches is not None:
+        existing_raw = item.get("items", {}).get("S", "[]")
+        try:
+            existing_items = json.loads(existing_raw)
+        except (json.JSONDecodeError, TypeError):
+            existing_items = []
+
+        for i, patch in enumerate(new_item_patches):
+            if i < len(existing_items) and "description" in patch:
+                existing_items[i]["description"] = patch["description"]
+
+        updates["items"] = {"S": json.dumps(existing_items)}
+
+        if LINE_ITEMS_TABLE:
+            created_at = item.get("created_at", {}).get("S", "")
+            for i, patch in enumerate(new_item_patches):
+                if "description" not in patch:
+                    continue
+                item_sk = f"{created_at}#{job_id}#{i:03d}"
+                new_desc = patch["description"]
+                try:
+                    dynamodb.update_item(
+                        TableName=LINE_ITEMS_TABLE,
+                        Key={"user_id": {"S": user_id}, "item_sk": {"S": item_sk}},
+                        UpdateExpression="SET #d = :d, #dc = :dc",
+                        ExpressionAttributeNames={"#d": "description", "#dc": "desc_created"},
+                        ExpressionAttributeValues={
+                            ":d":  {"S": new_desc},
+                            ":dc": {"S": f"{new_desc}#{created_at}"},
+                        },
+                    )
+                except Exception as e:
+                    print(f"WARN: line_item update failed {item_sk}: {e}")
+
+    update_job(job_id, updates)
+
+    refreshed = dynamodb.get_item(
+        TableName=DYNAMODB_TABLE,
+        Key={"job_id": {"S": job_id}},
+    )
+    return make_response(200, format_receipt(refreshed["Item"]))
+
+
+def update_job(job_id: str, updates: dict) -> None:
+    set_parts = []
+    attr_names = {}
+    attr_values = {}
+    for i, (key, val) in enumerate(updates.items()):
+        name_alias = f"#k{i}"
+        val_alias = f":v{i}"
+        set_parts.append(f"{name_alias} = {val_alias}")
+        attr_names[name_alias] = key
+        attr_values[val_alias] = val
+    dynamodb.update_item(
+        TableName=DYNAMODB_TABLE,
+        Key={"job_id": {"S": job_id}},
+        UpdateExpression="SET " + ", ".join(set_parts),
+        ExpressionAttributeNames=attr_names,
+        ExpressionAttributeValues=attr_values,
+    )
+
+
 def format_receipt(item: dict) -> dict:
     items_raw = item.get("items", {}).get("S", "[]")
     try:
@@ -267,27 +356,35 @@ def format_receipt(item: dict) -> dict:
     except (json.JSONDecodeError, TypeError):
         line_items = []
 
-    debug_url = None
-    debug_key = item.get("debug_s3_key", {}).get("S")
-    if debug_key:
-        debug_url = s3.generate_presigned_url(
+    job_id = item["job_id"]["S"]
+
+    def presign(key, filename):
+        return s3.generate_presigned_url(
             "get_object",
-            Params={
-                "Bucket": UPLOADS_BUCKET,
-                "Key": debug_key,
-                "ResponseContentDisposition": f"attachment; filename=textract_{item['job_id']['S']}.json",
-            },
+            Params={"Bucket": UPLOADS_BUCKET, "Key": key,
+                    "ResponseContentDisposition": f"attachment; filename={filename}"},
             ExpiresIn=3600,
         )
 
+    debug_url = None
+    debug_key = item.get("debug_s3_key", {}).get("S")
+    if debug_key:
+        debug_url = presign(debug_key, f"claude_{job_id}.json")
+
+    textract_debug_url = None
+    textract_debug_key = item.get("textract_debug_s3_key", {}).get("S")
+    if textract_debug_key:
+        textract_debug_url = presign(textract_debug_key, f"textract_{job_id}.json")
+
     return {
-        "jobId": item["job_id"]["S"],
+        "jobId": job_id,
         "status": item.get("status", {}).get("S", "UNKNOWN"),
         "vendor": item.get("vendor", {}).get("S"),
         "receiptDate": item.get("receipt_date", {}).get("S"),
         "total": item.get("total", {}).get("S"),
         "items": line_items,
         "debugUrl": debug_url,
+        "textractDebugUrl": textract_debug_url,
         "createdAt": item.get("created_at", {}).get("S"),
         "updatedAt": item.get("updated_at", {}).get("S"),
     }

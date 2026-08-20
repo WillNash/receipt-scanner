@@ -3,15 +3,15 @@ import 'package:flutter/material.dart';
 import '../../data/models/receipt.dart';
 
 class ReceiptCard extends StatelessWidget {
-  const ReceiptCard({super.key, required this.job, this.onDelete});
+  const ReceiptCard({super.key, required this.job, this.onDelete, this.onEdit});
 
   final ReceiptJob job;
   final VoidCallback? onDelete;
+  final VoidCallback? onEdit;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
     return Card(
       child: ExpansionTile(
         tilePadding: const EdgeInsets.only(left: 16, right: 4, top: 4, bottom: 4),
@@ -29,8 +29,6 @@ class ReceiptCard extends StatelessWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _statusChip(theme),
-            const SizedBox(width: 4),
             IconButton(
               icon: Icon(Icons.delete_outline,
                   size: 20, color: theme.colorScheme.error),
@@ -49,25 +47,22 @@ class ReceiptCard extends StatelessWidget {
             )
           else
             _ItemsTable(items: job.items),
+          Padding(
+            padding: const EdgeInsets.only(left: 8, right: 8, bottom: 8),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                icon: const Icon(Icons.edit_outlined, size: 16),
+                label: const Text('Edit'),
+                onPressed: onEdit,
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _statusChip(ThemeData theme) {
-    final (label, color) = switch (job.status) {
-      'COMPLETE' => ('Done', Colors.green),
-      'FAILED' => ('Failed', Colors.red),
-      _ => ('Pending', Colors.orange),
-    };
-    return Chip(
-      label: Text(label, style: const TextStyle(fontSize: 11)),
-      backgroundColor: color.withOpacity(0.15),
-      side: BorderSide(color: color.withOpacity(0.4)),
-      padding: EdgeInsets.zero,
-      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    );
-  }
 }
 
 class _ItemsTable extends StatelessWidget {
@@ -87,16 +82,37 @@ class _ItemsTable extends StatelessWidget {
           ...items.map(
             (item) => Padding(
               padding: const EdgeInsets.symmetric(vertical: 2),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Text(item.description,
-                        style: theme.textTheme.bodySmall),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          [
+                            item.description,
+                            if (item.quantity != null && item.unitPrice != null)
+                              '${item.quantity} @ \$${item.unitPrice}',
+                          ].join('  '),
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ),
+                      if (item.price != null)
+                        Text(item.price!,
+                            style: theme.textTheme.bodySmall
+                                ?.copyWith(fontWeight: FontWeight.w500)),
+                    ],
                   ),
-                  if (item.price != null)
-                    Text(item.price!,
-                        style: theme.textTheme.bodySmall
-                            ?.copyWith(fontWeight: FontWeight.w500)),
+                  if (item.discount != null)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: Text(
+                        'Discount: ${item.discount}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: Colors.green.shade700,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),

@@ -41,23 +41,45 @@ resource "aws_iam_role_policy" "lambda_processor" {
         Resource = aws_sqs_queue.image_jobs.arn
       },
       {
-        Sid      = "S3GetUpload"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:DeleteObject"]
-        Resource = "${aws_s3_bucket.uploads.arn}/uploads/*"
+        Sid    = "S3GetUpload"
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:DeleteObject"]
+        Resource = [
+          "${aws_s3_bucket.uploads.arn}/uploads/*",
+          "${aws_s3_bucket.uploads.arn}/cropped/*",
+        ]
       },
       {
-        # AnalyzeDocument does not support resource-level restrictions
-        Sid      = "TextractAnalyzeDocument"
+        Sid    = "S3CroppedAndDebugWrite"
+        Effect = "Allow"
+        Action = "s3:PutObject"
+        Resource = [
+          "${aws_s3_bucket.uploads.arn}/debug/*",
+          "${aws_s3_bucket.uploads.arn}/cropped/*",
+        ]
+      },
+      {
+        Sid      = "TextractDetect"
         Effect   = "Allow"
-        Action   = "textract:AnalyzeDocument"
+        Action   = "textract:DetectDocumentText"
         Resource = "*"
       },
       {
-        Sid      = "S3DebugWrite"
+        # Inference profiles (cross-region) use a different ARN format to foundation models
+        Sid    = "BedrockInvokeModel"
+        Effect = "Allow"
+        Action = "bedrock:InvokeModel"
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/*",
+          "arn:aws:bedrock:${var.primary_region}:${var.aws_account_id}:inference-profile/*",
+        ]
+      },
+      {
+        # Required by Bedrock to verify/complete Anthropic Marketplace subscription
+        Sid      = "MarketplaceSubscription"
         Effect   = "Allow"
-        Action   = "s3:PutObject"
-        Resource = "${aws_s3_bucket.uploads.arn}/debug/*"
+        Action   = ["aws-marketplace:ViewSubscriptions", "aws-marketplace:Subscribe"]
+        Resource = "*"
       },
       {
         Sid    = "DynamoDBWrite"
@@ -130,9 +152,9 @@ resource "aws_iam_role_policy" "lambda_api" {
         Resource = aws_dynamodb_table.image_hashes.arn
       },
       {
-        Sid    = "LineItemsDelete"
+        Sid    = "LineItemsAccess"
         Effect = "Allow"
-        Action = ["dynamodb:Query", "dynamodb:BatchWriteItem"]
+        Action = ["dynamodb:Query", "dynamodb:BatchWriteItem", "dynamodb:UpdateItem"]
         Resource = [
           aws_dynamodb_table.line_items.arn,
           "${aws_dynamodb_table.line_items.arn}/index/*",

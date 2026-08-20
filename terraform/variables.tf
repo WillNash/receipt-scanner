@@ -25,7 +25,7 @@ variable "environment" {
 
 variable "lambda_timeout_processor" {
   type    = number
-  default = 60
+  default = 120
 }
 
 variable "lambda_timeout_api" {
@@ -41,4 +41,9 @@ variable "daily_upload_limit" {
 variable "global_upload_limit" {
   type    = number
   default = 100
+}
+
+variable "bedrock_model_id" {
+  type    = string
+  default = "au.anthropic.claude-haiku-4-5-20251001-v1:0"
 }

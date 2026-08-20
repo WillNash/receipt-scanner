@@ -364,7 +364,6 @@ function buildReceiptCard(job) {
     </div>
     ${job.receiptDate ? `<div class="receipt-meta"><span class="receipt-date">${escapeHtml(formatDate(job.receiptDate))}</span></div>` : ""}
     ${itemsHtml}
-    ${job.debugUrl && localStorage.getItem("debug") ? `<div style="margin-top:0.75rem"><a href="${escapeHtml(job.debugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Download raw Textract response</a></div>` : ""}
   `;
   return card;
 }
@@ -393,8 +392,110 @@ function renderHistory(receipts) {
     return;
   }
   list.innerHTML = "";
-  complete.forEach(job => list.appendChild(buildReceiptCard(job)));
+  complete.forEach(job => list.appendChild(buildHistoryCard(job)));
   section.style.display = "";
+}
+
+function buildHistoryCard(job) {
+  const card = buildReceiptCard(job);
+  if (job.status !== "COMPLETE") return card;
+
+  if (job.textractDebugUrl || job.debugUrl) {
+    const dl = document.createElement("div");
+    dl.style.cssText = "margin-top:0.5rem;display:flex;gap:0.5rem;flex-wrap:wrap";
+    if (job.textractDebugUrl) {
+      dl.innerHTML += `<a href="${escapeHtml(job.textractDebugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Raw OCR (Textract)</a>`;
+    }
+    if (job.debugUrl) {
+      dl.innerHTML += `<a href="${escapeHtml(job.debugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">AI parsed (Haiku)</a>`;
+    }
+    card.appendChild(dl);
+  }
+
+  const editBtn = document.createElement("button");
+  editBtn.className = "btn btn-secondary";
+  editBtn.style.cssText = "margin-top:0.5rem;font-size:0.8rem";
+  editBtn.textContent = "Edit";
+  editBtn.addEventListener("click", () => showEditModal(job));
+  card.appendChild(editBtn);
+  return card;
+}
+
+async function showEditModal(job) {
+  // Build modal overlay
+  const overlay = document.createElement("div");
+  overlay.style.cssText = `
+    position:fixed;inset:0;background:rgba(0,0,0,0.5);
+    display:flex;align-items:center;justify-content:center;z-index:1000`;
+
+  const items = Array.isArray(job.items) ? job.items : [];
+  const itemFields = items.map((it, i) => `
+    <div style="margin-bottom:0.5rem">
+      <label style="display:block;font-size:0.8rem;margin-bottom:2px">Item ${i + 1}</label>
+      <input class="edit-item" data-index="${i}" type="text" value="${escapeHtml(it.description || '')}"
+        style="width:100%;padding:0.4rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
+    </div>`).join("");
+
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:8px;padding:1.5rem;width:min(480px,90vw);max-height:90vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.2)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <h3 style="margin:0">Edit Receipt</h3>
+        <button id="edit-close" style="background:none;border:none;cursor:pointer;font-size:1.2rem">✕</button>
+      </div>
+      <div style="margin-bottom:0.75rem">
+        <label style="display:block;font-size:0.8rem;margin-bottom:2px">Store / Vendor</label>
+        <input id="edit-vendor" type="text" value="${escapeHtml(job.vendor || '')}"
+          style="width:100%;padding:0.4rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
+      </div>
+      <div style="margin-bottom:0.75rem">
+        <label style="display:block;font-size:0.8rem;margin-bottom:2px">Receipt date</label>
+        <input id="edit-date" type="text" value="${escapeHtml(job.receiptDate || '')}"
+          style="width:100%;padding:0.4rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
+      </div>
+      ${itemFields ? `<div style="margin-bottom:0.75rem"><p style="font-weight:500;margin:0 0 0.5rem">Line items</p>${itemFields}</div>` : ""}
+      <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+        <button id="edit-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="edit-save" class="btn">Save</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  const close = () => document.body.removeChild(overlay);
+  overlay.querySelector("#edit-close").addEventListener("click", close);
+  overlay.querySelector("#edit-cancel").addEventListener("click", close);
+  overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
+
+  overlay.querySelector("#edit-save").addEventListener("click", async () => {
+    const vendor = overlay.querySelector("#edit-vendor").value.trim();
+    const receiptDate = overlay.querySelector("#edit-date").value.trim();
+    const itemInputs = overlay.querySelectorAll(".edit-item");
+    const patchedItems = Array.from(itemInputs).map(inp => ({
+      description: inp.value.trim(),
+    }));
+
+    const saveBtn = overlay.querySelector("#edit-save");
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+
+    try {
+      const resp = await fetch(`${CONFIG.apiBaseUrl}/receipts/${job.jobId}`, {
+        method: "PATCH",
+        headers: {
+          "Authorization": `Bearer ${getToken()}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ vendor, receiptDate, items: patchedItems }),
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      close();
+      loadHistory();
+    } catch (err) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save";
+      alert("Failed to save: " + err.message);
+    }
+  });
 }
 
 // ── Event listeners ───────────────────────────────────────────────────────────
