@@ -59,11 +59,14 @@ resource "aws_iam_role_policy" "lambda_processor" {
         ]
       },
       {
-        # Converse API requires bedrock:InvokeModel on the foundation model resource
-        Sid      = "BedrockInvokeModel"
-        Effect   = "Allow"
-        Action   = "bedrock:InvokeModel"
-        Resource = "arn:aws:bedrock:${var.primary_region}::foundation-model/*"
+        # Inference profiles (cross-region) use a different ARN format to foundation models
+        Sid    = "BedrockInvokeModel"
+        Effect = "Allow"
+        Action = "bedrock:InvokeModel"
+        Resource = [
+          "arn:aws:bedrock:${var.primary_region}::foundation-model/*",
+          "arn:aws:bedrock:${var.primary_region}:${var.aws_account_id}:inference-profile/*",
+        ]
       },
       {
         Sid    = "DynamoDBWrite"
