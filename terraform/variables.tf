@@ -45,5 +45,5 @@ variable "global_upload_limit" {
 
 variable "bedrock_model_id" {
   type    = string
-  default = "amazon.nova-lite-v1:0"
+  default = "anthropic.claude-3-5-haiku-20241022-v1:0"
 }
