@@ -20,6 +20,7 @@ BEDROCK_MODEL_ID = os.environ.get(
 s3 = boto3.client("s3", region_name=PRIMARY_REGION)
 dynamodb = boto3.client("dynamodb", region_name=PRIMARY_REGION)
 bedrock = boto3.client("bedrock-runtime", region_name=PRIMARY_REGION)
+textract = boto3.client("textract", region_name=PRIMARY_REGION)
 
 # Tool definition — forces structured JSON output from the model
 RECEIPT_TOOL = {
@@ -193,53 +194,59 @@ def process_record(record):
             )
 
 
-_BEDROCK_MAX_BYTES = 4_500_000  # 5 MB hard limit; stay under with buffer
-
-
-def _prepare_for_bedrock(data: bytes) -> tuple[bytes, str]:
-    """Return (bytes, format) compressed to fit Bedrock's 5 MB image limit.
-
-    Detects format from magic bytes and re-encodes as JPEG if needed
-    (handles HEIC, oversized PNG/JPEG, and any other cv2-decodeable format).
-    """
-    is_png = data[:8] == b"\x89PNG\r\n\x1a\n"
-    fmt = "png" if is_png else "jpeg"
-
-    if len(data) <= _BEDROCK_MAX_BYTES and fmt in ("jpeg", "png"):
-        return data, fmt
-
+def _to_jpeg(data: bytes) -> bytes:
+    """Ensure image bytes are JPEG — converts HEIC and other formats via cv2."""
+    if data[:2] == b"\xff\xd8":
+        return data
     arr = np.frombuffer(data, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
-        raise ValueError(f"Cannot decode image ({len(data)//1024}KB) for Bedrock")
+        raise ValueError(f"Cannot decode image ({len(data)//1024}KB)")
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    if not ok:
+        raise ValueError("Failed to encode image as JPEG")
+    return buf.tobytes()
 
-    for quality in (88, 75, 60):
-        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
-        compressed = buf.tobytes()
-        if ok and len(compressed) <= _BEDROCK_MAX_BYTES:
-            print(f"COMPRESS {len(data)//1024}KB -> {len(compressed)//1024}KB (q={quality})")
-            return compressed, "jpeg"
 
-    # Last resort: scale down then encode
-    h, w = img.shape[:2]
-    scale = (_BEDROCK_MAX_BYTES / len(data)) ** 0.5 * 0.9
-    resized = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
-    ok, buf = cv2.imencode(".jpg", resized, [cv2.IMWRITE_JPEG_QUALITY, 82])
-    compressed = buf.tobytes()
-    print(f"COMPRESS+RESIZE {len(data)//1024}KB -> {len(compressed)//1024}KB")
-    return compressed, "jpeg"
+def _textract_lines(image_bytes: bytes) -> str:
+    """Run Textract DetectDocumentText and return lines in reading order.
+
+    Groups blocks into rows by proximity then sorts left-to-right within each
+    row, producing a layout-aware text representation of the receipt.
+    """
+    resp = textract.detect_document_text(Document={"Bytes": image_bytes})
+    blocks = [b for b in resp["Blocks"] if b["BlockType"] == "LINE"]
+    blocks.sort(key=lambda b: b["Geometry"]["BoundingBox"]["Top"])
+
+    ROW_GAP = 0.012  # fraction of page height — blocks closer than this are the same row
+    rows: list[list] = []
+    current: list = []
+    for block in blocks:
+        if not current or block["Geometry"]["BoundingBox"]["Top"] - current[0]["Geometry"]["BoundingBox"]["Top"] < ROW_GAP:
+            current.append(block)
+        else:
+            rows.append(sorted(current, key=lambda b: b["Geometry"]["BoundingBox"]["Left"]))
+            current = [block]
+    if current:
+        rows.append(sorted(current, key=lambda b: b["Geometry"]["BoundingBox"]["Left"]))
+
+    lines = ["  ".join(b["Text"] for b in row) for row in rows]
+    print(f"TEXTRACT lines={len(lines)}")
+    return "\n".join(lines)
 
 
 def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None = None) -> dict:
     crop_receipt(bucket, key, image_data=image_data)
 
-    # Use cropped version if it exists, otherwise fall back to original
+    # Use cropped JPEG if available, otherwise convert original (handles HEIC)
     cropped_key = key.replace("uploads/", "cropped/", 1)
     try:
         data = s3.get_object(Bucket=bucket, Key=cropped_key)["Body"].read()
     except s3.exceptions.NoSuchKey:
-        data = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
-    data, fmt = _prepare_for_bedrock(data)
+        raw = image_data or s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+        data = _to_jpeg(raw)
+
+    receipt_text = _textract_lines(data)
 
     response = bedrock.converse(
         modelId=BEDROCK_MODEL_ID,
@@ -248,26 +255,25 @@ def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None
                 "role": "user",
                 "content": [
                     {
-                        "image": {
-                            "format": fmt,
-                            "source": {"bytes": data},
-                        }
-                    },
-                    {
                         "text": (
-                            "Extract all data from this receipt. "
+                            "Here is text extracted by OCR from a receipt, in reading order "
+                            "(items on the same row are separated by two spaces):\n\n"
+                            f"{receipt_text}\n\n"
+                            "Extract all structured data from this receipt. "
                             "Include every purchased product as a line item. "
                             "Exclude summary lines such as subtotal, GST, EFTPOS, cash, and change. "
                             "Return all prices and totals without currency symbols. "
-                            "For multi-unit lines like '2 @ $1.79 $3.58', set description to the product name, "
-                            "quantity to '2', unit_price to '1.79', price to '3.58'. "
-                            "If a discount line follows an item (e.g. '-$0.58'), merge it into that item: "
-                            "set discount to '-0.58' (negative) and set price to the amount after the discount is applied. "
+                            "For multi-unit lines like 'ITEM NAME  $price' followed by '2 @  $1.79', "
+                            "set quantity to '2', unit_price to '1.79', price to the line total. "
+                            "For weight-based lines like '1.741 Kg @  $1.49/Kg', "
+                            "set quantity to '1.741 Kg', unit_price to '1.49'. "
+                            "If a discount appears as a product name repeated with a negative amount (e.g. 'BROCCOLI  -$0.58'), "
+                            "merge it into the preceding item for that product: set discount to '-0.58' (negative). "
                             "price = (quantity * unit_price) + discount. "
                             "Do not create a separate line item for discounts. "
-                            "Use an empty string for any field you cannot read."
+                            "Use an empty string for any field you cannot determine."
                         )
-                    },
+                    }
                 ],
             }
         ],

@@ -59,6 +59,12 @@ resource "aws_iam_role_policy" "lambda_processor" {
         ]
       },
       {
+        Sid      = "TextractDetect"
+        Effect   = "Allow"
+        Action   = "textract:DetectDocumentText"
+        Resource = "*"
+      },
+      {
         # Inference profiles (cross-region) use a different ARN format to foundation models
         Sid    = "BedrockInvokeModel"
         Effect = "Allow"
