@@ -12,7 +12,6 @@ class ReceiptCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
     return Card(
       child: ExpansionTile(
         tilePadding: const EdgeInsets.only(left: 16, right: 4, top: 4, bottom: 4),
@@ -30,8 +29,6 @@ class ReceiptCard extends StatelessWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _statusChip(theme),
-            const SizedBox(width: 4),
             IconButton(
               icon: Icon(Icons.delete_outline,
                   size: 20, color: theme.colorScheme.error),
@@ -66,20 +63,6 @@ class ReceiptCard extends StatelessWidget {
     );
   }
 
-  Widget _statusChip(ThemeData theme) {
-    final (label, color) = switch (job.status) {
-      'COMPLETE' => ('Done', Colors.green),
-      'FAILED' => ('Failed', Colors.red),
-      _ => ('Pending', Colors.orange),
-    };
-    return Chip(
-      label: Text(label, style: const TextStyle(fontSize: 11)),
-      backgroundColor: color.withOpacity(0.15),
-      side: BorderSide(color: color.withOpacity(0.4)),
-      padding: EdgeInsets.zero,
-      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-    );
-  }
 }
 
 class _ItemsTable extends StatelessWidget {
