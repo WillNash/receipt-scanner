@@ -174,7 +174,11 @@ def handle_list_receipts(user_id: str):
         ScanIndexForward=False,
         Limit=20,
     )
-    receipts = [format_receipt(item) for item in result.get("Items", [])]
+    receipts = [
+        format_receipt(item)
+        for item in result.get("Items", [])
+        if item.get("status", {}).get("S") != "DUPLICATE"
+    ]
     return make_response(200, {"receipts": receipts})
 
 

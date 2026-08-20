@@ -64,7 +64,7 @@ class UploadService {
       );
       final job = ReceiptJob.fromJson(response.data!);
 
-      if (job.status == 'COMPLETE' || job.status == 'FAILED') return job;
+      if (job.isComplete || job.isFailed || job.isDuplicate) return job;
     }
     return null; // timed out
   }

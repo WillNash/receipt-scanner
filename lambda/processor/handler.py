@@ -105,23 +105,21 @@ def process_record(record):
 
         prior_job_id = lookup_image_hash(user_id, image_hash)
         if prior_job_id:
-            result = copy_job_result(prior_job_id, job_id, image_hash)
-            if result:
-                print(f"DUPLICATE image_hash={image_hash[:12]}… reusing job {prior_job_id}")
+            prior_resp = dynamodb.get_item(
+                TableName=DYNAMODB_TABLE,
+                Key={"job_id": {"S": prior_job_id}},
+            )
+            prior_status = prior_resp.get("Item", {}).get("status", {}).get("S")
+            if prior_status == "COMPLETE":
+                print(f"DUPLICATE image_hash={image_hash[:12]}… prior_job={prior_job_id}")
                 s3.delete_object(Bucket=bucket, Key=key)
-                expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
                 update_job(job_id, {
-                    "status": {"S": "COMPLETE"},
-                    "vendor": {"S": result["vendor"]},
-                    "receipt_date": {"S": result["receipt_date"]},
-                    "total": {"S": result["total"]},
-                    "items": {"S": json.dumps(result["items"])},
-                    "debug_s3_key": {"S": result["debug_s3_key"]},
+                    "status": {"S": "DUPLICATE"},
                     "image_hash": {"S": image_hash},
                     "updated_at": {"S": now_iso()},
-                    "expires_at": {"N": str(expiry)},
                 })
                 continue
+            # Prior job not yet COMPLETE (still processing or failed) — re-process.
 
         result = analyze_receipt(bucket, key, job_id, image_data=image_data)
 

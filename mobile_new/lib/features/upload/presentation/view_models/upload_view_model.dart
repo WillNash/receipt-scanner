@@ -173,6 +173,14 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
         return;
       }
 
+      if (result.isDuplicate) {
+        _update(id, (u) => u.copyWith(
+              status: UploadStatus.duplicate,
+              error: 'This image has already been scanned.',
+            ));
+        return;
+      }
+
       if (result.isFailed) {
         _update(id, (u) => u.copyWith(
               status: UploadStatus.failed,
