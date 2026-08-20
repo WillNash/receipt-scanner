@@ -176,10 +176,10 @@ class _EditReceiptSheetState extends State<_EditReceiptSheet> {
             items: items,
           );
       if (mounted) Navigator.pop(context);
-    } catch (_) {
+    } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to save changes.')),
+          SnackBar(content: Text('Failed to save: $e')),
         );
       }
     } finally {
