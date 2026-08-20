@@ -193,6 +193,43 @@ def process_record(record):
             )
 
 
+_BEDROCK_MAX_BYTES = 4_500_000  # 5 MB hard limit; stay under with buffer
+
+
+def _prepare_for_bedrock(data: bytes) -> tuple[bytes, str]:
+    """Return (bytes, format) compressed to fit Bedrock's 5 MB image limit.
+
+    Detects format from magic bytes and re-encodes as JPEG if needed
+    (handles HEIC, oversized PNG/JPEG, and any other cv2-decodeable format).
+    """
+    is_png = data[:8] == b"\x89PNG\r\n\x1a\n"
+    fmt = "png" if is_png else "jpeg"
+
+    if len(data) <= _BEDROCK_MAX_BYTES and fmt in ("jpeg", "png"):
+        return data, fmt
+
+    arr = np.frombuffer(data, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError(f"Cannot decode image ({len(data)//1024}KB) for Bedrock")
+
+    for quality in (88, 75, 60):
+        ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+        compressed = buf.tobytes()
+        if ok and len(compressed) <= _BEDROCK_MAX_BYTES:
+            print(f"COMPRESS {len(data)//1024}KB -> {len(compressed)//1024}KB (q={quality})")
+            return compressed, "jpeg"
+
+    # Last resort: scale down then encode
+    h, w = img.shape[:2]
+    scale = (_BEDROCK_MAX_BYTES / len(data)) ** 0.5 * 0.9
+    resized = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".jpg", resized, [cv2.IMWRITE_JPEG_QUALITY, 82])
+    compressed = buf.tobytes()
+    print(f"COMPRESS+RESIZE {len(data)//1024}KB -> {len(compressed)//1024}KB")
+    return compressed, "jpeg"
+
+
 def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None = None) -> dict:
     crop_receipt(bucket, key, image_data=image_data)
 
@@ -202,7 +239,7 @@ def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None
         data = s3.get_object(Bucket=bucket, Key=cropped_key)["Body"].read()
     except s3.exceptions.NoSuchKey:
         data = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
-    fmt = "png" if key.lower().endswith(".png") else "jpeg"
+    data, fmt = _prepare_for_bedrock(data)
 
     response = bedrock.converse(
         modelId=BEDROCK_MODEL_ID,
@@ -354,10 +391,7 @@ def crop_receipt(bucket: str, key: str, image_data: bytes | None = None) -> None
             return
 
         cropped = img[upper:lower, left:right]
-        is_jpeg = key.lower().endswith((".jpg", ".jpeg"))
-        ext = ".jpg" if is_jpeg else ".png"
-        params = [cv2.IMWRITE_JPEG_QUALITY, 95] if is_jpeg else []
-        ok, buf = cv2.imencode(ext, cropped, params)
+        ok, buf = cv2.imencode(".jpg", cropped, [cv2.IMWRITE_JPEG_QUALITY, 92])
         if not ok:
             print("CROP_SKIPPED: imencode failed")
             return
@@ -373,7 +407,7 @@ def crop_receipt(bucket: str, key: str, image_data: bytes | None = None) -> None
             Bucket=bucket,
             Key=cropped_key,
             Body=cropped_bytes,
-            ContentType="image/jpeg" if is_jpeg else "image/png",
+            ContentType="image/jpeg",
         )
 
     except Exception as exc:
