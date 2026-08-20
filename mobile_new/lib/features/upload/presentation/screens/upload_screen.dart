@@ -219,6 +219,33 @@ class _SavedCapturesPickerState extends State<_SavedCapturesPicker> {
     if (mounted) setState(() => _files = files);
   }
 
+  Future<void> _confirmDelete(BuildContext context, File file) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete photo?'),
+        content: const Text('This permanently deletes the photo from your device.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await file.delete();
+    setState(() {
+      _selected.remove(file.path);
+      _files?.remove(file);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final files = _files;
@@ -285,6 +312,7 @@ class _SavedCapturesPickerState extends State<_SavedCapturesPicker> {
                       _selected.add(file.path);
                     }
                   }),
+                  onLongPress: () => _confirmDelete(context, file),
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
