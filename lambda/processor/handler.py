@@ -22,15 +22,36 @@ dynamodb = boto3.client("dynamodb", region_name=PRIMARY_REGION)
 bedrock = boto3.client("bedrock-runtime", region_name=PRIMARY_REGION)
 textract = boto3.client("textract", region_name=PRIMARY_REGION)
 
+VALID_STORE_CATEGORIES = {
+    "grocery", "petrol", "pharmacy", "restaurant", "fast_food", "cafe",
+    "hardware", "department_store", "clothing", "electronics",
+    "health_beauty", "liquor", "other",
+}
+
+VALID_ITEM_CATEGORIES = {
+    "fruit_veg", "dairy", "meat_seafood", "bakery", "deli", "frozen",
+    "pantry", "snacks", "confectionery", "beverages", "alcohol",
+    "household", "personal_care", "pet", "tobacco", "non_food", "other",
+}
+
 # Tool definition — forces structured JSON output from the model
 RECEIPT_TOOL = {
     "toolSpec": {
         "name": "extract_receipt",
-        "description": "Extract structured data from a receipt image.",
+        "description": "Extract and classify structured data from a receipt.",
         "inputSchema": {
             "json": {
                 "type": "object",
                 "properties": {
+                    "store_category": {
+                        "type": "string",
+                        "description": (
+                            "Type of store. Pick exactly one: "
+                            "grocery | petrol | pharmacy | restaurant | fast_food | cafe | "
+                            "hardware | department_store | clothing | electronics | "
+                            "health_beauty | liquor | other"
+                        ),
+                    },
                     "vendor": {
                         "type": "string",
                         "description": "Store or vendor name",
@@ -90,12 +111,33 @@ RECEIPT_TOOL = {
                                         "price should equal (quantity * unit_price) + discount."
                                     ),
                                 },
+                                "item_category": {
+                                    "type": "string",
+                                    "description": (
+                                        "Product category. Pick exactly one: "
+                                        "fruit_veg | dairy | meat_seafood | bakery | deli | frozen | "
+                                        "pantry | snacks | confectionery | beverages | alcohol | "
+                                        "household | personal_care | pet | tobacco | non_food | other. "
+                                        "Use 'other' for generic descriptions like 'Value Pack' or bare SKU codes."
+                                    ),
+                                },
+                                "nova_group": {
+                                    "type": "integer",
+                                    "description": (
+                                        "NOVA food processing group: "
+                                        "1=unprocessed/minimally processed (fresh apple, plain chicken, brown rice), "
+                                        "2=culinary ingredient (olive oil, butter, sugar, plain flour), "
+                                        "3=processed food (canned tuna, block cheese, sourdough loaf, canned tomatoes), "
+                                        "4=ultra-processed (chips, instant noodles, diet cola, flavoured yoghurt, breakfast bars). "
+                                        "Use null for non-food items."
+                                    ),
+                                },
                             },
                             "required": ["description"],
                         },
                     },
                 },
-                "required": ["vendor", "receipt_date", "total", "items"],
+                "required": ["store_category", "vendor", "receipt_date", "total", "items"],
             }
         },
     }
@@ -169,6 +211,7 @@ def process_record(record):
         expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
         update_job(job_id, {
             "status": {"S": "COMPLETE"},
+            "store_category": {"S": result["store_category"]},
             "vendor": {"S": result["vendor"]},
             "receipt_date": {"S": result["receipt_date"]},
             "total": {"S": result["total"]},
@@ -191,6 +234,7 @@ def process_record(record):
                 created_at=created_at,
                 vendor=result["vendor"],
                 receipt_date=result["receipt_date"],
+                store_category=result["store_category"],
                 items=result["items"],
                 expires_at=expiry,
             )
@@ -259,7 +303,7 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
                             "Here is text extracted by OCR from a receipt, in reading order "
                             "(items on the same row are separated by two spaces):\n\n"
                             f"{receipt_text}\n\n"
-                            "Extract all structured data from this receipt. "
+                            "Extract all structured data from this receipt and classify it. "
                             "Include every purchased product as a line item. "
                             "Exclude summary lines such as subtotal, GST, EFTPOS, cash, and change. "
                             "Return all prices and totals without currency symbols. "
@@ -271,7 +315,24 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
                             "merge it into the preceding item for that product: set discount to '-0.58' (negative). "
                             "price = (quantity * unit_price) + discount. "
                             "Do not create a separate line item for discounts. "
-                            "Use an empty string for any field you cannot determine."
+                            "Use an empty string for any field you cannot determine.\n\n"
+                            "Classification rules:\n"
+                            "- Generic descriptions ('Value Pack', 'Bulk Buy', 'Misc', bare SKU codes) "
+                            "-> item_category: 'other', nova_group: null\n"
+                            "- Non-food items always have nova_group: null\n"
+                            "- Receipt descriptions are often abbreviated; use context clues\n\n"
+                            "Classification examples:\n"
+                            "  'ANCHOR BLUE MILK 2L'      -> dairy,         nova_group: 1\n"
+                            "  'BROCCOLI'                 -> fruit_veg,     nova_group: 1\n"
+                            "  'MEADOWFRESH CHSE 500G'    -> dairy,         nova_group: 3\n"
+                            "  'HOMEBRAND OLIVE OIL 750ML'-> pantry,        nova_group: 2\n"
+                            "  'WATTIES TOMATOES 400G'    -> pantry,        nova_group: 3\n"
+                            "  'PRINGLES ORIG 165G'       -> snacks,        nova_group: 4\n"
+                            "  'COCA COLA NO SUGAR 1.5L'  -> beverages,     nova_group: 4\n"
+                            "  'SPEIGHTS GOLD 12PK'       -> alcohol,       nova_group: null\n"
+                            "  'FANCY FEAST CAT FOOD'     -> pet,           nova_group: null\n"
+                            "  'GLAD WRAP 30M'            -> household,     nova_group: null\n"
+                            "  'VALUE PACK'               -> other,         nova_group: null"
                         )
                     }
                 ],
@@ -295,6 +356,8 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
         f"input={usage.get('inputTokens')} output={usage.get('outputTokens')}"
     )
 
+    _validate_classification(extracted)
+
     textract_debug_key = save_debug(job_id, user_id, {"lines": receipt_lines}, suffix="_textract")
     claude_debug_key = save_debug(job_id, user_id, {
         "model": BEDROCK_MODEL_ID,
@@ -303,6 +366,7 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
     })
 
     return {
+        "store_category": extracted.get("store_category") or "other",
         "vendor": extracted.get("vendor") or "Unknown vendor",
         "receipt_date": extracted.get("receipt_date") or "",
         "total": extracted.get("total") or "",
@@ -311,6 +375,18 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
         "textract_debug_s3_key": textract_debug_key,
         "cropped_s3_key": cropped_key,
     }
+
+
+def _validate_classification(extracted: dict) -> None:
+    """Clamp any out-of-vocabulary classification values to safe defaults in-place."""
+    if extracted.get("store_category") not in VALID_STORE_CATEGORIES:
+        extracted["store_category"] = "other"
+    for item in extracted.get("items", []):
+        if item.get("item_category") not in VALID_ITEM_CATEGORIES:
+            item["item_category"] = "other"
+        nova = item.get("nova_group")
+        if nova not in (1, 2, 3, 4, None):
+            item["nova_group"] = None
 
 
 def save_debug(job_id: str, user_id: str, payload: dict, suffix: str = "") -> str:
@@ -499,6 +575,7 @@ def write_line_items(
     created_at: str,
     vendor: str,
     receipt_date: str,
+    store_category: str,
     items: list,
     expires_at: int,
 ) -> None:
@@ -518,16 +595,17 @@ def write_line_items(
                 return None
 
         record: dict = {
-            "user_id":      {"S": user_id},
-            "item_sk":      {"S": item_sk},
-            "job_id":       {"S": job_id},
-            "description":  {"S": description},
-            "desc_created": {"S": desc_created},
-            "email":        {"S": user_email},
-            "vendor":       {"S": vendor},
-            "receipt_date": {"S": receipt_date},
-            "created_at":   {"S": created_at},
-            "expires_at":   {"N": str(expires_at)},
+            "user_id":        {"S": user_id},
+            "item_sk":        {"S": item_sk},
+            "job_id":         {"S": job_id},
+            "description":    {"S": description},
+            "desc_created":   {"S": desc_created},
+            "email":          {"S": user_email},
+            "vendor":         {"S": vendor},
+            "receipt_date":   {"S": receipt_date},
+            "store_category": {"S": store_category},
+            "created_at":     {"S": created_at},
+            "expires_at":     {"N": str(expires_at)},
         }
 
         for field in ("quantity", "unit_price", "price", "discount"):
@@ -535,8 +613,16 @@ def write_line_items(
             if n:
                 record[field] = n
 
+        item_category = item.get("item_category", "other")
+        if item_category in VALID_ITEM_CATEGORIES:
+            record["item_category"] = {"S": item_category}
+
+        nova = item.get("nova_group")
+        if nova in (1, 2, 3, 4):
+            record["nova_group"] = {"N": str(nova)}
+
         dynamodb.put_item(TableName=LINE_ITEMS_TABLE, Item=record)
-        print(f"LINE_ITEM_WRITTEN {job_id}#{i:03d} {description!r}")
+        print(f"LINE_ITEM_WRITTEN {job_id}#{i:03d} {description!r} [{item_category}]")
 
 
 def update_job(job_id: str, fields: dict) -> None:

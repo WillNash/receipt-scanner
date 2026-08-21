@@ -360,12 +360,19 @@ function buildReceiptCard(job) {
       </tbody>
     </table>` : "";
 
+  const categoryLabel = job.storeCategory
+    ? `<span class="store-category-badge">${escapeHtml(job.storeCategory.replace(/_/g, " "))}</span>`
+    : "";
+
   card.innerHTML = `
     <div class="receipt-header">
       <span class="receipt-vendor">${escapeHtml(job.vendor || "Unknown vendor")}</span>
       ${job.total ? `<span class="receipt-total">${escapeHtml(job.total)}</span>` : ""}
     </div>
-    ${job.receiptDate ? `<div class="receipt-meta"><span class="receipt-date">${escapeHtml(formatDate(job.receiptDate))}</span></div>` : ""}
+    <div class="receipt-meta">
+      ${job.receiptDate ? `<span class="receipt-date">${escapeHtml(formatDate(job.receiptDate))}</span>` : ""}
+      ${categoryLabel}
+    </div>
     ${itemsHtml}
   `;
   return card;

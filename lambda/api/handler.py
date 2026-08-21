@@ -416,6 +416,7 @@ def format_receipt(item: dict) -> dict:
     return {
         "jobId": job_id,
         "status": item.get("status", {}).get("S", "UNKNOWN"),
+        "storeCategory": item.get("store_category", {}).get("S"),
         "vendor": item.get("vendor", {}).get("S"),
         "receiptDate": item.get("receipt_date", {}).get("S"),
         "total": item.get("total", {}).get("S"),
