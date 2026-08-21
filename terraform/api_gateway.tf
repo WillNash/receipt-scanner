@@ -11,6 +11,16 @@ resource "aws_api_gateway_rest_api" "main" {
   }
 }
 
+## Cognito authorizer — validates the id_token JWT at the gateway before Lambda is invoked
+
+resource "aws_api_gateway_authorizer" "cognito" {
+  name            = "${var.project_name}-cognito-authorizer"
+  rest_api_id     = aws_api_gateway_rest_api.main.id
+  type            = "COGNITO_USER_POOLS"
+  identity_source = "method.request.header.Authorization"
+  provider_arns   = [aws_cognito_user_pool.main.arn]
+}
+
 ## /upload-url resource
 
 resource "aws_api_gateway_resource" "upload_url" {
@@ -23,7 +33,8 @@ resource "aws_api_gateway_method" "upload_url_post" {
   rest_api_id   = aws_api_gateway_rest_api.main.id
   resource_id   = aws_api_gateway_resource.upload_url.id
   http_method   = "POST"
-  authorization = "NONE"
+  authorization = "COGNITO_USER_POOLS"
+  authorizer_id = aws_api_gateway_authorizer.cognito.id
 }
 
 resource "aws_api_gateway_integration" "upload_url_post" {
@@ -94,7 +105,8 @@ resource "aws_api_gateway_method" "job_id_get" {
   rest_api_id   = aws_api_gateway_rest_api.main.id
   resource_id   = aws_api_gateway_resource.job_id.id
   http_method   = "GET"
-  authorization = "NONE"
+  authorization = "COGNITO_USER_POOLS"
+  authorizer_id = aws_api_gateway_authorizer.cognito.id
 }
 
 resource "aws_api_gateway_integration" "job_id_get" {
@@ -159,7 +171,8 @@ resource "aws_api_gateway_method" "receipts_get" {
   rest_api_id   = aws_api_gateway_rest_api.main.id
   resource_id   = aws_api_gateway_resource.receipts.id
   http_method   = "GET"
-  authorization = "NONE"
+  authorization = "COGNITO_USER_POOLS"
+  authorizer_id = aws_api_gateway_authorizer.cognito.id
 }
 
 resource "aws_api_gateway_integration" "receipts_get" {
@@ -224,7 +237,8 @@ resource "aws_api_gateway_method" "receipt_id_delete" {
   rest_api_id   = aws_api_gateway_rest_api.main.id
   resource_id   = aws_api_gateway_resource.receipt_id.id
   http_method   = "DELETE"
-  authorization = "NONE"
+  authorization = "COGNITO_USER_POOLS"
+  authorizer_id = aws_api_gateway_authorizer.cognito.id
 }
 
 resource "aws_api_gateway_integration" "receipt_id_delete" {
@@ -240,7 +254,8 @@ resource "aws_api_gateway_method" "receipt_id_patch" {
   rest_api_id   = aws_api_gateway_rest_api.main.id
   resource_id   = aws_api_gateway_resource.receipt_id.id
   http_method   = "PATCH"
-  authorization = "NONE"
+  authorization = "COGNITO_USER_POOLS"
+  authorizer_id = aws_api_gateway_authorizer.cognito.id
 }
 
 resource "aws_api_gateway_integration" "receipt_id_patch" {
@@ -319,6 +334,7 @@ resource "aws_api_gateway_deployment" "main" {
 
   triggers = {
     redeployment = sha1(jsonencode([
+      aws_api_gateway_authorizer.cognito.id,
       aws_api_gateway_resource.upload_url.id,
       aws_api_gateway_method.upload_url_post.id,
       aws_api_gateway_integration.upload_url_post.id,

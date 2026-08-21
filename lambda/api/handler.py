@@ -265,9 +265,40 @@ def handle_delete_receipt(job_id: str | None, user_id: str):
     return make_response(200, {"deleted": True})
 
 
+def _validate_edit_body(body: dict) -> str | None:
+    """Return an error string if the PATCH body fails validation, else None."""
+    if "vendor" in body:
+        v = body["vendor"]
+        if not isinstance(v, str) or len(v) > 200:
+            return "vendor must be a string of at most 200 characters"
+    if "receiptDate" in body:
+        d = body["receiptDate"]
+        if not isinstance(d, str) or len(d) > 20:
+            return "receiptDate must be a string of at most 20 characters"
+        import re
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+            return "receiptDate must be in YYYY-MM-DD format"
+    if "items" in body:
+        items = body["items"]
+        if not isinstance(items, list) or len(items) > 200:
+            return "items must be a list of at most 200 entries"
+        for item in items:
+            if not isinstance(item, dict):
+                return "each item must be an object"
+            if "description" in item:
+                desc = item["description"]
+                if not isinstance(desc, str) or len(desc) > 500:
+                    return "item description must be a string of at most 500 characters"
+    return None
+
+
 def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
     if not job_id:
         return make_response(400, {"error": "jobId required"})
+
+    err = _validate_edit_body(body)
+    if err:
+        return make_response(400, {"error": err})
 
     result = dynamodb.get_item(
         TableName=DYNAMODB_TABLE,

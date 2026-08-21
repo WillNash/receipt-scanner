@@ -44,10 +44,13 @@ resource "aws_iam_role_policy" "lambda_processor" {
         Sid    = "S3GetUpload"
         Effect = "Allow"
         Action = ["s3:GetObject", "s3:DeleteObject"]
-        Resource = [
-          "${aws_s3_bucket.uploads.arn}/uploads/*",
-          "${aws_s3_bucket.uploads.arn}/cropped/*",
-        ]
+        Resource = "${aws_s3_bucket.uploads.arn}/uploads/*"
+      },
+      {
+        Sid    = "S3GetCropped"
+        Effect = "Allow"
+        Action = "s3:GetObject"
+        Resource = "${aws_s3_bucket.uploads.arn}/cropped/*"
       },
       {
         Sid    = "S3CroppedAndDebugWrite"

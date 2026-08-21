@@ -132,7 +132,9 @@ function escapeHtml(s) {
   return String(s || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 // ── File selection ────────────────────────────────────────────────────────────
@@ -209,8 +211,9 @@ function renderQueue() {
     li.innerHTML = `
       <span class="queue-name">${escapeHtml(file.name)}</span>
       <span class="queue-size">${(file.size / 1024).toFixed(0)} KB</span>
-      <button class="queue-remove" data-index="${i}" aria-label="Remove ${escapeHtml(file.name)}">✕</button>
+      <button class="queue-remove" data-index="${i}">✕</button>
     `;
+    li.querySelector(".queue-remove").setAttribute("aria-label", `Remove ${file.name}`);
     list.appendChild(li);
   });
 }

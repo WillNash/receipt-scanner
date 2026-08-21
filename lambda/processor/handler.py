@@ -164,7 +164,7 @@ def process_record(record):
                 })
                 continue
 
-        result = analyze_receipt(bucket, key, job_id, image_data=image_data)
+        result = analyze_receipt(bucket, key, job_id, user_id, image_data=image_data)
 
         expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
         update_job(job_id, {
@@ -237,7 +237,7 @@ def _textract_lines(image_bytes: bytes) -> tuple[str, list[str]]:
     return "\n".join(lines), lines
 
 
-def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None = None) -> dict:
+def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data: bytes | None = None) -> dict:
     cropped_key = crop_receipt(bucket, key, image_data=image_data)
 
     if cropped_key:
@@ -295,8 +295,8 @@ def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None
         f"input={usage.get('inputTokens')} output={usage.get('outputTokens')}"
     )
 
-    textract_debug_key = save_debug(job_id, {"lines": receipt_lines}, suffix="_textract")
-    claude_debug_key = save_debug(job_id, {
+    textract_debug_key = save_debug(job_id, user_id, {"lines": receipt_lines}, suffix="_textract")
+    claude_debug_key = save_debug(job_id, user_id, {
         "model": BEDROCK_MODEL_ID,
         "extracted": extracted,
         "usage": usage,
@@ -313,8 +313,8 @@ def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None
     }
 
 
-def save_debug(job_id: str, payload: dict, suffix: str = "") -> str:
-    debug_key = f"debug/{job_id}{suffix}.json"
+def save_debug(job_id: str, user_id: str, payload: dict, suffix: str = "") -> str:
+    debug_key = f"debug/{user_id}/{job_id}{suffix}.json"
     s3.put_object(
         Bucket=S3_BUCKET,
         Key=debug_key,
