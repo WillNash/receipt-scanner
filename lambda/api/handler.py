@@ -12,6 +12,7 @@ LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
 IMAGE_HASHES_TABLE = os.environ.get("IMAGE_HASHES_TABLE", "")
 UPLOADS_BUCKET = os.environ["UPLOADS_BUCKET"]
 COGNITO_POOL_ID = os.environ["COGNITO_USER_POOL_ID"]
+COGNITO_APP_CLIENT_ID = os.environ["COGNITO_APP_CLIENT_ID"]
 PRIMARY_REGION = os.environ.get("PRIMARY_REGION", "ap-southeast-2")
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 DAILY_UPLOAD_LIMIT = int(os.environ.get("DAILY_UPLOAD_LIMIT", "50"))
@@ -412,8 +413,12 @@ def get_user_id(event) -> tuple[str, str]:
         token,
         jwks,
         algorithms=["RS256"],
-        options={"verify_aud": False, "verify_at_hash": False},
+        audience=COGNITO_APP_CLIENT_ID,
+        issuer=f"https://cognito-idp.{PRIMARY_REGION}.amazonaws.com/{COGNITO_POOL_ID}",
+        options={"verify_at_hash": False},
     )
+    if claims.get("token_use") != "id":
+        raise ValueError("Wrong token_use")
     return claims["sub"], claims.get("email", "")
 
 
