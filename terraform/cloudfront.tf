@@ -8,6 +8,10 @@ resource "aws_cloudfront_response_headers_policy" "security" {
       preload                    = true
       override                   = true
     }
+    content_security_policy {
+      content_security_policy = "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; connect-src 'self' https://*.amazonaws.com https://*.amazoncognito.com; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      override                = true
+    }
     content_type_options {
       override = true
     }
@@ -23,14 +27,6 @@ resource "aws_cloudfront_response_headers_policy" "security" {
       mode_block = true
       protection = true
       override   = true
-    }
-  }
-
-  custom_headers_config {
-    items {
-      header   = "Content-Security-Policy"
-      value    = "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; connect-src 'self' https://*.amazonaws.com https://*.amazoncognito.com; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
-      override = true
     }
   }
 }
