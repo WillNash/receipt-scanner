@@ -169,11 +169,14 @@ resource "aws_iam_role_policy" "lambda_api" {
         Resource = "${aws_s3_bucket.uploads.arn}/*"
       },
       {
-        # GetObject is required to generate presigned GET URLs for debug downloads
-        Sid      = "S3DebugRead"
-        Effect   = "Allow"
-        Action   = "s3:GetObject"
-        Resource = "${aws_s3_bucket.uploads.arn}/debug/*"
+        # GetObject is required to generate presigned GET URLs for debug and cropped image downloads
+        Sid    = "S3DebugAndCroppedRead"
+        Effect = "Allow"
+        Action = "s3:GetObject"
+        Resource = [
+          "${aws_s3_bucket.uploads.arn}/debug/*",
+          "${aws_s3_bucket.uploads.arn}/cropped/*",
+        ]
       },
     ]
   })
