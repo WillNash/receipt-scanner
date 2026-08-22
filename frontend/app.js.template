@@ -111,7 +111,7 @@ function showError(msg) {
 
 function apiErrorMessage(status) {
   if (status === 401 || status === 403) return "Your session has expired — sign in again.";
-  if (status === 429) return "You've reached the daily scan limit. Try again tomorrow.";
+  if (status === 429) return "Upload limit reached. Try again tomorrow.";
   if (status >= 500) return "Something went wrong on our end. Try again in a moment.";
   return `Unexpected error (${status}).`;
 }
@@ -248,7 +248,9 @@ async function handleUpload() {
         }).then(async r => {
           if (!r.ok) {
             const b = await r.json().catch(() => ({}));
-            throw new Error(b.error || apiErrorMessage(r.status));
+            const err = new Error(b.error || apiErrorMessage(r.status));
+            err.httpStatus = r.status;
+            throw err;
           }
           return r.json();
         })
@@ -288,7 +290,9 @@ async function handleUpload() {
     selectedFiles = filesToProcess;
     renderQueue();
     showMainSection("upload-section");
-    showError(`Upload failed: ${err.message}`);
+    // Rate-limit and auth errors: show the server message directly without a generic prefix
+    const knownStatus = err.httpStatus === 429 || err.httpStatus === 401 || err.httpStatus === 403;
+    showError(knownStatus ? err.message : `Upload failed: ${err.message}`);
   } finally {
     scanAbortController = null;
   }

@@ -86,11 +86,16 @@ def lambda_handler(event, context):
 
 
 def check_and_increment_global_count() -> bool:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    expiry = int((datetime.now(timezone.utc) + timedelta(days=2)).timestamp())
     resp = dynamodb.update_item(
         TableName=DYNAMODB_TABLE,
-        Key={"job_id": {"S": "COUNT#GLOBAL"}},
-        UpdateExpression="ADD upload_count :one",
-        ExpressionAttributeValues={":one": {"N": "1"}},
+        Key={"job_id": {"S": f"COUNT#GLOBAL#{today}"}},
+        UpdateExpression="ADD upload_count :one SET expires_at = if_not_exists(expires_at, :exp)",
+        ExpressionAttributeValues={
+            ":one": {"N": "1"},
+            ":exp": {"N": str(expiry)},
+        },
         ReturnValues="UPDATED_NEW",
     )
     count = int(resp["Attributes"]["upload_count"]["N"])
@@ -131,11 +136,17 @@ def handle_upload_url(event, user_id: str, user_email: str):
             prior_job_id = resp["Item"].get("job_id", {}).get("S", "")
             return make_response(409, {"error": "duplicate", "jobId": prior_job_id})
 
-    if not check_and_increment_global_count():
-        return make_response(429, {"error": "Global upload limit reached."})
-
     if not check_and_increment_daily_count(user_id):
-        return make_response(429, {"error": "Daily upload limit reached. Try again tomorrow."})
+        return make_response(429, {
+            "error": f"You've reached your daily limit of {DAILY_UPLOAD_LIMIT} uploads. Try again tomorrow.",
+            "limitType": "user",
+        })
+
+    if not check_and_increment_global_count():
+        return make_response(429, {
+            "error": "Today's global upload limit has been reached. Try again tomorrow.",
+            "limitType": "global",
+        })
 
     ext = VALID_CONTENT_TYPES[content_type]
     job_id = str(uuid.uuid4())
