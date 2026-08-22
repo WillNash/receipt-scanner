@@ -338,67 +338,13 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
     if "receiptDate" in body:
         updates["receipt_date"] = {"S": str(body["receiptDate"])}
 
-    new_item_patches = body.get("items")  # list of {"description": "..."}
-    if new_item_patches is not None:
-        existing_raw = item.get("items", {}).get("S", "[]")
-        try:
-            existing_items = json.loads(existing_raw)
-        except (json.JSONDecodeError, TypeError):
-            existing_items = []
-
-        _ITEM_STR_FIELDS = ("description", "quantity", "unit_price", "price", "discount")
-        for i, patch in enumerate(new_item_patches):
-            if i >= len(existing_items):
-                continue
-            for field in _ITEM_STR_FIELDS:
-                if field in patch:
-                    existing_items[i][field] = patch[field]
-
-        updates["items"] = {"S": json.dumps(existing_items)}
+    new_items = body.get("items")  # full replacement list
+    if new_items is not None:
+        updates["items"] = {"S": json.dumps(new_items)}
 
         if LINE_ITEMS_TABLE:
             created_at = item.get("created_at", {}).get("S", "")
-            for i, patch in enumerate(new_item_patches):
-                if not any(f in patch for f in _ITEM_STR_FIELDS):
-                    continue
-                item_sk = f"{created_at}#{job_id}#{i:03d}"
-                set_parts, attr_names, attr_values = [], {}, {}
-
-                if "description" in patch:
-                    new_desc = patch["description"]
-                    set_parts += ["#d = :d", "#dc = :dc"]
-                    attr_names.update({"#d": "description", "#dc": "desc_created"})
-                    attr_values.update({":d": {"S": new_desc}, ":dc": {"S": f"{new_desc}#{created_at}"}})
-
-                for field in ("quantity", "unit_price", "price", "discount"):
-                    if field not in patch:
-                        continue
-                    alias = f"#{field}"
-                    val_alias = f":{field}"
-                    set_parts.append(f"{alias} = {val_alias}")
-                    attr_names[alias] = field
-                    try:
-                        cleaned = str(patch[field]).replace(",", "").replace("$", "").strip()
-                        num = float(cleaned) if cleaned else None
-                    except (ValueError, TypeError):
-                        num = None
-                    if num is not None:
-                        attr_values[val_alias] = {"N": str(num)}
-                    else:
-                        attr_values[val_alias] = {"S": str(patch[field])}
-
-                if not set_parts:
-                    continue
-                try:
-                    dynamodb.update_item(
-                        TableName=LINE_ITEMS_TABLE,
-                        Key={"user_id": {"S": user_id}, "item_sk": {"S": item_sk}},
-                        UpdateExpression="SET " + ", ".join(set_parts),
-                        ExpressionAttributeNames=attr_names,
-                        ExpressionAttributeValues=attr_values,
-                    )
-                except Exception as e:
-                    print(f"WARN: line_item update failed {item_sk}: {e}")
+            _replace_line_items(job_id, user_id, item, created_at, new_items)
 
     update_job(job_id, updates)
 
@@ -407,6 +353,79 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
         Key={"job_id": {"S": job_id}},
     )
     return make_response(200, format_receipt(refreshed["Item"]))
+
+
+def _replace_line_items(job_id: str, user_id: str, job_record: dict, created_at: str, new_items: list) -> None:
+    """Delete all existing line_items for this job then insert the new list."""
+    def to_n(val):
+        try:
+            cleaned = str(val).replace(",", "").replace("$", "").strip()
+            return {"N": str(float(cleaned))} if cleaned else None
+        except (ValueError, TypeError):
+            return None
+
+    # Delete existing rows
+    if created_at:
+        prefix = f"{created_at}#{job_id}#"
+        resp = dynamodb.query(
+            TableName=LINE_ITEMS_TABLE,
+            KeyConditionExpression="#uid = :uid AND begins_with(#sk, :prefix)",
+            ExpressionAttributeNames={"#uid": "user_id", "#sk": "item_sk"},
+            ExpressionAttributeValues={
+                ":uid": {"S": user_id},
+                ":prefix": {"S": prefix},
+            },
+            ProjectionExpression="#uid, #sk",
+        )
+        keys = [{"user_id": it["user_id"], "item_sk": it["item_sk"]} for it in resp.get("Items", [])]
+        for i in range(0, len(keys), 25):
+            dynamodb.batch_write_item(
+                RequestItems={
+                    LINE_ITEMS_TABLE: [{"DeleteRequest": {"Key": k}} for k in keys[i:i + 25]]
+                }
+            )
+
+    # Read context fields from the job record
+    vendor       = job_record.get("vendor",         {}).get("S", "")
+    receipt_date = job_record.get("receipt_date",   {}).get("S", "")
+    store_cat    = job_record.get("store_category", {}).get("S", "other")
+    user_email   = job_record.get("email",          {}).get("S", "")
+    expires_at   = job_record.get("expires_at",     {}).get("N", "0")
+
+    for i, new_item in enumerate(new_items):
+        description = str(new_item.get("description") or "").strip()
+        if not description:
+            continue
+        item_sk     = f"{created_at}#{job_id}#{i:03d}"
+        desc_created = f"{description}#{created_at}"
+        record = {
+            "user_id":        {"S": user_id},
+            "item_sk":        {"S": item_sk},
+            "job_id":         {"S": job_id},
+            "description":    {"S": description},
+            "desc_created":   {"S": desc_created},
+            "email":          {"S": user_email},
+            "vendor":         {"S": vendor},
+            "receipt_date":   {"S": receipt_date},
+            "store_category": {"S": store_cat},
+            "created_at":     {"S": created_at},
+            "expires_at":     {"N": str(expires_at)},
+        }
+        for field in ("quantity", "unit_price", "price", "discount"):
+            n = to_n(new_item.get(field))
+            if n:
+                record[field] = n
+        # Preserve classification fields if present (carried through from original item)
+        item_category = new_item.get("item_category")
+        if isinstance(item_category, str) and item_category:
+            record["item_category"] = {"S": item_category}
+        nova = new_item.get("nova_group")
+        if isinstance(nova, int) and nova in (1, 2, 3, 4):
+            record["nova_group"] = {"N": str(nova)}
+        try:
+            dynamodb.put_item(TableName=LINE_ITEMS_TABLE, Item=record)
+        except Exception as e:
+            print(f"WARN: line_item insert failed {item_sk}: {e}")
 
 
 def update_job(job_id: str, updates: dict) -> None:
