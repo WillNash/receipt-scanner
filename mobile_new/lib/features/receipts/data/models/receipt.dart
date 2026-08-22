@@ -5,6 +5,8 @@ class LineItem {
     this.unitPrice,
     this.price,
     this.discount,
+    this.itemCategory,
+    this.novaGroup,
   });
 
   final String description;
@@ -12,6 +14,8 @@ class LineItem {
   final String? unitPrice;
   final String? price;
   final String? discount;
+  final String? itemCategory;
+  final int? novaGroup;
 
   factory LineItem.fromJson(Map<String, dynamic> json) => LineItem(
         description: json['description'] as String? ?? '',
@@ -19,6 +23,8 @@ class LineItem {
         unitPrice: json['unit_price'] as String?,
         price: json['price'] as String?,
         discount: json['discount'] as String?,
+        itemCategory: json['item_category'] as String?,
+        novaGroup: json['nova_group'] as int?,
       );
 }
 
