@@ -342,6 +342,12 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
     if new_items is not None:
         updates["items"] = {"S": json.dumps(new_items)}
 
+        # Recalculate price check so the warning clears once items are corrected
+        total_str = item.get("total", {}).get("S", "")
+        pc = _recheck_prices(new_items, total_str)
+        updates["price_check_warning"] = {"BOOL": pc["warning"]}
+        updates["price_check_message"] = {"S": pc["message"]}
+
         if LINE_ITEMS_TABLE:
             created_at = item.get("created_at", {}).get("S", "")
             _replace_line_items(job_id, user_id, item, created_at, new_items)
@@ -353,6 +359,29 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
         Key={"job_id": {"S": job_id}},
     )
     return make_response(200, format_receipt(refreshed["Item"]))
+
+
+def _recheck_prices(items: list, total_str: str) -> dict:
+    def to_float(val):
+        try:
+            cleaned = str(val).replace(",", "").replace("$", "").strip()
+            return float(cleaned) if cleaned else None
+        except (ValueError, TypeError):
+            return None
+
+    total = to_float(total_str)
+    if total is None:
+        return {"warning": False, "message": ""}
+
+    items_sum = round(sum(p for p in (to_float(it.get("price")) for it in items) if p is not None), 2)
+    diff = abs(items_sum - total)
+    if diff > 0.10 and diff > total * 0.01:
+        direction = "over" if items_sum > total else "under"
+        return {
+            "warning": True,
+            "message": f"item prices sum to {items_sum:.2f} but receipt total is {total:.2f} ({direction} by {diff:.2f})",
+        }
+    return {"warning": False, "message": f"ok (difference {diff:.2f})"}
 
 
 def _replace_line_items(job_id: str, user_id: str, job_record: dict, created_at: str, new_items: list) -> None:
