@@ -289,6 +289,15 @@ def _validate_edit_body(body: dict) -> str | None:
                 desc = item["description"]
                 if not isinstance(desc, str) or len(desc) > 500:
                     return "item description must be a string of at most 500 characters"
+            if "quantity" in item:
+                qty = item["quantity"]
+                if not isinstance(qty, str) or len(qty) > 50:
+                    return "item quantity must be a string of at most 50 characters"
+            for field in ("unit_price", "price", "discount"):
+                if field in item:
+                    val = item[field]
+                    if not isinstance(val, str) or len(val) > 30:
+                        return f"item {field} must be a string of at most 30 characters"
     return None
 
 
@@ -326,29 +335,56 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
         except (json.JSONDecodeError, TypeError):
             existing_items = []
 
+        _ITEM_STR_FIELDS = ("description", "quantity", "unit_price", "price", "discount")
         for i, patch in enumerate(new_item_patches):
-            if i < len(existing_items) and "description" in patch:
-                existing_items[i]["description"] = patch["description"]
+            if i >= len(existing_items):
+                continue
+            for field in _ITEM_STR_FIELDS:
+                if field in patch:
+                    existing_items[i][field] = patch[field]
 
         updates["items"] = {"S": json.dumps(existing_items)}
 
         if LINE_ITEMS_TABLE:
             created_at = item.get("created_at", {}).get("S", "")
             for i, patch in enumerate(new_item_patches):
-                if "description" not in patch:
+                if not any(f in patch for f in _ITEM_STR_FIELDS):
                     continue
                 item_sk = f"{created_at}#{job_id}#{i:03d}"
-                new_desc = patch["description"]
+                set_parts, attr_names, attr_values = [], {}, {}
+
+                if "description" in patch:
+                    new_desc = patch["description"]
+                    set_parts += ["#d = :d", "#dc = :dc"]
+                    attr_names.update({"#d": "description", "#dc": "desc_created"})
+                    attr_values.update({":d": {"S": new_desc}, ":dc": {"S": f"{new_desc}#{created_at}"}})
+
+                for field in ("quantity", "unit_price", "price", "discount"):
+                    if field not in patch:
+                        continue
+                    alias = f"#{field}"
+                    val_alias = f":{field}"
+                    set_parts.append(f"{alias} = {val_alias}")
+                    attr_names[alias] = field
+                    try:
+                        cleaned = str(patch[field]).replace(",", "").replace("$", "").strip()
+                        num = float(cleaned) if cleaned else None
+                    except (ValueError, TypeError):
+                        num = None
+                    if num is not None:
+                        attr_values[val_alias] = {"N": str(num)}
+                    else:
+                        attr_values[val_alias] = {"S": str(patch[field])}
+
+                if not set_parts:
+                    continue
                 try:
                     dynamodb.update_item(
                         TableName=LINE_ITEMS_TABLE,
                         Key={"user_id": {"S": user_id}, "item_sk": {"S": item_sk}},
-                        UpdateExpression="SET #d = :d, #dc = :dc",
-                        ExpressionAttributeNames={"#d": "description", "#dc": "desc_created"},
-                        ExpressionAttributeValues={
-                            ":d":  {"S": new_desc},
-                            ":dc": {"S": f"{new_desc}#{created_at}"},
-                        },
+                        UpdateExpression="SET " + ", ".join(set_parts),
+                        ExpressionAttributeNames=attr_names,
+                        ExpressionAttributeValues=attr_values,
                     )
                 except Exception as e:
                     print(f"WARN: line_item update failed {item_sk}: {e}")
@@ -413,6 +449,9 @@ def format_receipt(item: dict) -> dict:
     if cropped_key:
         cropped_image_url = presign(cropped_key, f"cropped_{job_id}.jpg")
 
+    price_check_warning = item.get("price_check_warning", {}).get("BOOL", False)
+    price_check_message = item.get("price_check_message", {}).get("S")
+
     return {
         "jobId": job_id,
         "status": item.get("status", {}).get("S", "UNKNOWN"),
@@ -421,6 +460,8 @@ def format_receipt(item: dict) -> dict:
         "receiptDate": item.get("receipt_date", {}).get("S"),
         "total": item.get("total", {}).get("S"),
         "items": line_items,
+        "priceCheckWarning": price_check_warning,
+        "priceCheckMessage": price_check_message,
         "debugUrl": debug_url,
         "textractDebugUrl": textract_debug_url,
         "croppedImageUrl": cropped_image_url,

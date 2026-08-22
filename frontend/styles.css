@@ -204,6 +204,16 @@ header h1 {
   color: var(--muted);
 }
 
+.price-check-warning {
+  font-size: var(--text-sm);
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 4px;
+  padding: 0.3rem 0.6rem;
+  margin-bottom: 0.5rem;
+}
+
 .store-category-badge {
   display: inline-block;
   font-size: 0.7rem;

@@ -212,6 +212,8 @@ def process_record(record):
         update_job(job_id, {
             "status": {"S": "COMPLETE"},
             "store_category": {"S": result["store_category"]},
+            "price_check_warning": {"BOOL": result["price_check_warning"]},
+            "price_check_message": {"S": result["price_check_message"]},
             "vendor": {"S": result["vendor"]},
             "receipt_date": {"S": result["receipt_date"]},
             "total": {"S": result["total"]},
@@ -357,12 +359,16 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
     )
 
     _validate_classification(extracted)
+    price_check = _verify_price_sum(extracted)
+    if price_check["warning"]:
+        print(f"PRICE_CHECK_WARNING {price_check}")
 
     textract_debug_key = save_debug(job_id, user_id, {"lines": receipt_lines}, suffix="_textract")
     claude_debug_key = save_debug(job_id, user_id, {
         "model": BEDROCK_MODEL_ID,
         "extracted": extracted,
         "usage": usage,
+        "price_check": price_check,
     })
 
     return {
@@ -371,6 +377,8 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
         "receipt_date": extracted.get("receipt_date") or "",
         "total": extracted.get("total") or "",
         "items": extracted.get("items") or [],
+        "price_check_warning": price_check["warning"],
+        "price_check_message": price_check["message"],
         "debug_s3_key": claude_debug_key,
         "textract_debug_s3_key": textract_debug_key,
         "cropped_s3_key": cropped_key,
@@ -387,6 +395,57 @@ def _validate_classification(extracted: dict) -> None:
         nova = item.get("nova_group")
         if nova not in (1, 2, 3, 4, None):
             item["nova_group"] = None
+
+
+def _to_float(val) -> float | None:
+    try:
+        cleaned = str(val).replace(",", "").replace("$", "").strip()
+        return float(cleaned) if cleaned else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _verify_price_sum(extracted: dict) -> dict:
+    """Compare sum of item prices to the receipt total. Returns a dict with findings."""
+    total = _to_float(extracted.get("total"))
+    items = extracted.get("items", [])
+
+    item_prices = []
+    unparseable = []
+    for i, item in enumerate(items):
+        p = _to_float(item.get("price"))
+        if p is not None:
+            item_prices.append(p)
+        elif item.get("price"):
+            unparseable.append(i)
+
+    items_sum = round(sum(item_prices), 2)
+    result = {
+        "total": total,
+        "items_sum": items_sum,
+        "difference": round(items_sum - total, 2) if total is not None else None,
+        "unparseable_indices": unparseable,
+        "warning": False,
+        "message": "",
+    }
+
+    if total is None:
+        result["message"] = "total could not be parsed"
+        return result
+
+    diff = abs(items_sum - total)
+    # Warn if discrepancy > $0.10 AND > 1% of total (tolerates rounding on large receipts)
+    if diff > 0.10 and diff > total * 0.01:
+        result["warning"] = True
+        direction = "over" if items_sum > total else "under"
+        result["message"] = (
+            f"item prices sum to {items_sum:.2f} but receipt total is {total:.2f} "
+            f"({direction} by {diff:.2f})"
+        )
+    else:
+        result["message"] = f"ok (difference {diff:.2f})"
+
+    return result
 
 
 def save_debug(job_id: str, user_id: str, payload: dict, suffix: str = "") -> str:

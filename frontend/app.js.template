@@ -364,6 +364,10 @@ function buildReceiptCard(job) {
     ? `<span class="store-category-badge">${escapeHtml(job.storeCategory.replace(/_/g, " "))}</span>`
     : "";
 
+  const priceWarning = job.priceCheckWarning
+    ? `<div class="price-check-warning">Price check: ${escapeHtml(job.priceCheckMessage || "item prices do not match total")} — use Edit to correct</div>`
+    : "";
+
   card.innerHTML = `
     <div class="receipt-header">
       <span class="receipt-vendor">${escapeHtml(job.vendor || "Unknown vendor")}</span>
@@ -373,6 +377,7 @@ function buildReceiptCard(job) {
       ${job.receiptDate ? `<span class="receipt-date">${escapeHtml(formatDate(job.receiptDate))}</span>` : ""}
       ${categoryLabel}
     </div>
+    ${priceWarning}
     ${itemsHtml}
   `;
   return card;
@@ -442,15 +447,29 @@ async function showEditModal(job) {
     display:flex;align-items:center;justify-content:center;z-index:1000`;
 
   const items = Array.isArray(job.items) ? job.items : [];
+  const receiptTotal = parseFloat(job.total) || 0;
+
   const itemFields = items.map((it, i) => `
     <div style="margin-bottom:0.5rem">
-      <label style="display:block;font-size:0.8rem;margin-bottom:2px">Item ${i + 1}</label>
-      <input class="edit-item" data-index="${i}" type="text" value="${escapeHtml(it.description || '')}"
-        style="width:100%;padding:0.4rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
+      <div style="font-size:0.75rem;color:#666;margin-bottom:2px">Item ${i + 1}</div>
+      <input class="edit-item-desc" data-index="${i}" type="text" value="${escapeHtml(it.description || '')}"
+        placeholder="Description"
+        style="width:100%;padding:0.35rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;margin-bottom:3px">
+      <div style="display:flex;gap:0.4rem">
+        <input class="edit-item-qty" data-index="${i}" type="text" value="${escapeHtml(it.quantity || '')}"
+          placeholder="Qty"
+          style="width:30%;padding:0.35rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
+        <input class="edit-item-price" data-index="${i}" type="text" value="${escapeHtml(it.price || '')}"
+          placeholder="Price"
+          style="width:35%;padding:0.35rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
+        <input class="edit-item-unit-price" data-index="${i}" type="text" value="${escapeHtml(it.unit_price || '')}"
+          placeholder="Unit price"
+          style="width:35%;padding:0.35rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
+      </div>
     </div>`).join("");
 
   overlay.innerHTML = `
-    <div style="background:#fff;border-radius:8px;padding:1.5rem;width:min(480px,90vw);max-height:90vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.2)">
+    <div style="background:#fff;border-radius:8px;padding:1.5rem;width:min(520px,92vw);max-height:90vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.2)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
         <h3 style="margin:0">Edit Receipt</h3>
         <button id="edit-close" style="background:none;border:none;cursor:pointer;font-size:1.2rem">✕</button>
@@ -465,7 +484,15 @@ async function showEditModal(job) {
         <input id="edit-date" type="text" value="${escapeHtml(job.receiptDate || '')}"
           style="width:100%;padding:0.4rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
       </div>
-      ${itemFields ? `<div style="margin-bottom:0.75rem"><p style="font-weight:500;margin:0 0 0.5rem">Line items</p>${itemFields}</div>` : ""}
+      ${itemFields ? `
+        <div style="margin-bottom:0.75rem">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:0.4rem">
+            <p style="font-weight:500;margin:0">Line items</p>
+            <span style="font-size:0.75rem;color:#666">Desc &nbsp;|&nbsp; Qty &nbsp;|&nbsp; Price &nbsp;|&nbsp; Unit price</span>
+          </div>
+          ${itemFields}
+          <div id="price-sum-bar" style="margin-top:0.5rem;padding:0.4rem 0.6rem;border-radius:4px;font-size:0.8rem;background:#f5f5f5"></div>
+        </div>` : ""}
       <div style="display:flex;gap:0.5rem;justify-content:flex-end">
         <button id="edit-cancel" class="btn btn-secondary">Cancel</button>
         <button id="edit-save" class="btn">Save</button>
@@ -473,6 +500,27 @@ async function showEditModal(job) {
     </div>`;
 
   document.body.appendChild(overlay);
+
+  // Live price-sum display
+  function updatePriceSum() {
+    const bar = overlay.querySelector("#price-sum-bar");
+    if (!bar) return;
+    const priceInputs = overlay.querySelectorAll(".edit-item-price");
+    let sum = 0;
+    priceInputs.forEach(inp => {
+      const v = parseFloat(inp.value.replace(/[,$]/g, "").trim());
+      if (!isNaN(v)) sum += v;
+    });
+    sum = Math.round(sum * 100) / 100;
+    const diff = Math.round((sum - receiptTotal) * 100) / 100;
+    const ok = Math.abs(diff) <= 0.10;
+    bar.style.background = ok ? "#e8f5e9" : "#fff3e0";
+    bar.style.color = ok ? "#2e7d32" : "#e65100";
+    bar.textContent = `Items sum: $${sum.toFixed(2)} / Receipt total: $${receiptTotal.toFixed(2)}`
+      + (ok ? "  ✓" : `  — ${diff > 0 ? "over" : "under"} by $${Math.abs(diff).toFixed(2)}`);
+  }
+  overlay.querySelectorAll(".edit-item-price").forEach(inp => inp.addEventListener("input", updatePriceSum));
+  updatePriceSum();
 
   const close = () => document.body.removeChild(overlay);
   overlay.querySelector("#edit-close").addEventListener("click", close);
@@ -482,9 +530,15 @@ async function showEditModal(job) {
   overlay.querySelector("#edit-save").addEventListener("click", async () => {
     const vendor = overlay.querySelector("#edit-vendor").value.trim();
     const receiptDate = overlay.querySelector("#edit-date").value.trim();
-    const itemInputs = overlay.querySelectorAll(".edit-item");
-    const patchedItems = Array.from(itemInputs).map(inp => ({
+    const descInputs = overlay.querySelectorAll(".edit-item-desc");
+    const qtyInputs = overlay.querySelectorAll(".edit-item-qty");
+    const priceInputs = overlay.querySelectorAll(".edit-item-price");
+    const unitPriceInputs = overlay.querySelectorAll(".edit-item-unit-price");
+    const patchedItems = Array.from(descInputs).map((inp, i) => ({
       description: inp.value.trim(),
+      quantity: qtyInputs[i].value.trim(),
+      price: priceInputs[i].value.trim(),
+      unit_price: unitPriceInputs[i].value.trim(),
     }));
 
     const saveBtn = overlay.querySelector("#edit-save");
