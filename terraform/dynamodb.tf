@@ -1,16 +1,8 @@
 resource "aws_dynamodb_table" "image_hashes" {
   name         = "${var.project_name}-image-hashes"
   billing_mode = "PAY_PER_REQUEST"
-
-  key_schema {
-    attribute_name = "user_id"
-    key_type       = "HASH"
-  }
-
-  key_schema {
-    attribute_name = "image_hash"
-    key_type       = "RANGE"
-  }
+  hash_key     = "user_id"
+  range_key    = "image_hash"
 
   attribute {
     name = "user_id"
@@ -36,19 +28,11 @@ resource "aws_dynamodb_table" "image_hashes" {
 resource "aws_dynamodb_table" "line_items" {
   name         = "${var.project_name}-line-items"
   billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "user_id"
+  range_key    = "item_sk"
 
   # item_sk  = "{created_at}#{job_id}#{NNN}"  — sortable by date, unique per item
   # desc_created = "{description}#{created_at}" — GSI SK for per-item date queries
-  key_schema {
-    attribute_name = "user_id"
-    key_type       = "HASH"
-  }
-
-  key_schema {
-    attribute_name = "item_sk"
-    key_type       = "RANGE"
-  }
-
   attribute {
     name = "user_id"
     type = "S"
@@ -66,17 +50,9 @@ resource "aws_dynamodb_table" "line_items" {
 
   global_secondary_index {
     name            = "description-date-index"
+    hash_key        = "user_id"
+    range_key       = "desc_created"
     projection_type = "ALL"
-
-    key_schema {
-      attribute_name = "user_id"
-      key_type       = "HASH"
-    }
-
-    key_schema {
-      attribute_name = "desc_created"
-      key_type       = "RANGE"
-    }
   }
 
   ttl {
@@ -93,14 +69,10 @@ resource "aws_dynamodb_table" "line_items" {
 resource "aws_dynamodb_table" "jobs" {
   name         = "${var.project_name}-jobs"
   billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "job_id"
 
   # Only key attributes are declared here; non-key attributes (status, label, etc.)
   # are schema-free and must NOT appear in attribute blocks
-  key_schema {
-    attribute_name = "job_id"
-    key_type       = "HASH"
-  }
-
   attribute {
     name = "job_id"
     type = "S"
@@ -118,17 +90,9 @@ resource "aws_dynamodb_table" "jobs" {
 
   global_secondary_index {
     name            = "user-jobs-index"
+    hash_key        = "user_id"
+    range_key       = "created_at"
     projection_type = "ALL"
-
-    key_schema {
-      attribute_name = "user_id"
-      key_type       = "HASH"
-    }
-
-    key_schema {
-      attribute_name = "created_at"
-      key_type       = "RANGE"
-    }
   }
 
   ttl {
