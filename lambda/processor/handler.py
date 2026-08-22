@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import os
 from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote_plus
@@ -256,8 +257,8 @@ def _to_jpeg(data: bytes) -> bytes:
     return buf.tobytes()
 
 
-def _textract_lines(image_bytes: bytes) -> tuple[str, list[str]]:
-    """Run Textract DetectDocumentText and return (full_text, lines) in reading order.
+def _textract_lines(image_bytes: bytes) -> tuple[str, list[str], list]:
+    """Run Textract DetectDocumentText and return (full_text, lines, line_blocks) in reading order.
 
     Groups blocks into rows by proximity then sorts left-to-right within each
     row, producing a layout-aware text representation of the receipt.
@@ -280,7 +281,49 @@ def _textract_lines(image_bytes: bytes) -> tuple[str, list[str]]:
 
     lines = ["  ".join(b["Text"] for b in row) for row in rows]
     print(f"TEXTRACT lines={len(lines)}")
-    return "\n".join(lines), lines
+    return "\n".join(lines), lines, blocks
+
+
+def _compute_skew_angle(blocks: list) -> float | None:
+    """Compute median skew angle in degrees from Textract LINE polygon top edges.
+
+    Positive means text is tilted counter-clockwise; negative means clockwise.
+    Returns None when there are fewer than 3 lines to average over.
+    """
+    angles = []
+    for block in blocks:
+        pts = block.get("Geometry", {}).get("Polygon", [])
+        if len(pts) < 2:
+            continue
+        dx = pts[1]["X"] - pts[0]["X"]
+        dy = pts[1]["Y"] - pts[0]["Y"]
+        if abs(dx) < 1e-6:
+            continue
+        angles.append(math.degrees(math.atan2(dy, dx)))
+    if len(angles) < 3:
+        return None
+    return float(np.median(angles))
+
+
+def _deskew_image(image_bytes: bytes, angle_deg: float) -> bytes:
+    """Rotate image by angle_deg degrees counter-clockwise. Expands canvas to avoid clipping.
+    Falls back to original bytes if decoding fails."""
+    arr = np.frombuffer(image_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        return image_bytes
+    h, w = img.shape[:2]
+    cx, cy = w / 2.0, h / 2.0
+    M = cv2.getRotationMatrix2D((cx, cy), angle_deg, 1.0)
+    cos_a = abs(M[0, 0])
+    sin_a = abs(M[0, 1])
+    new_w = int(h * sin_a + w * cos_a)
+    new_h = int(h * cos_a + w * sin_a)
+    M[0, 2] += (new_w - w) / 2.0
+    M[1, 2] += (new_h - h) / 2.0
+    rotated = cv2.warpAffine(img, M, (new_w, new_h), borderValue=(255, 255, 255))
+    ok, buf = cv2.imencode(".jpg", rotated, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    return buf.tobytes() if ok else image_bytes
 
 
 def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data: bytes | None = None) -> dict:
@@ -292,7 +335,16 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
         raw = image_data or s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         data = _to_jpeg(raw)
 
-    receipt_text, receipt_lines = _textract_lines(data)
+    receipt_text, receipt_lines, textract_blocks = _textract_lines(data)
+
+    skew = _compute_skew_angle(textract_blocks)
+    SKEW_THRESHOLD = 1.0  # degrees — below this, noise outweighs benefit
+    if skew is not None and SKEW_THRESHOLD < abs(skew) <= 30.0:
+        print(f"DESKEW angle={skew:.2f}° — rotating and re-running Textract")
+        data = _deskew_image(data, -skew)
+        receipt_text, receipt_lines, _ = _textract_lines(data)
+    else:
+        print(f"DESKEW skew={skew:.2f}° — no correction needed" if skew is not None else "DESKEW insufficient lines")
 
     response = bedrock.converse(
         modelId=BEDROCK_MODEL_ID,
