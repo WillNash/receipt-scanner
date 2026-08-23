@@ -309,6 +309,7 @@ def _textract_lines(image_bytes: bytes) -> tuple[str, list[str], list, list, flo
             unassigned.remove(best)
         rows.append(chain)
 
+    rows.sort(key=lambda row: min(_top(b) for b in row))
     lines = ["  ".join(b["Text"] for b in row) for row in rows]
     print(f"TEXTRACT lines={len(lines)} line_height={line_height:.4f} step_tol={step_tol:.4f}")
     return "\n".join(lines), lines, blocks, rows, line_height, step_tol
