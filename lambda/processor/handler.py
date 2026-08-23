@@ -9,6 +9,8 @@ import boto3
 import cv2
 import numpy as np
 
+from line_grouping import group_blocks
+
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
 LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
 IMAGE_HASHES_TABLE = os.environ.get("IMAGE_HASHES_TABLE", "")
@@ -273,43 +275,7 @@ def _textract_lines(image_bytes: bytes) -> tuple[str, list[str], list, list, flo
     if not blocks:
         return "", [], [], [], 0.0, 0.0
 
-    def _top(b):  return b["Geometry"]["BoundingBox"]["Top"]
-    def _left(b): return b["Geometry"]["BoundingBox"]["Left"]
-
-    # Phase 1 — calibrate: median of Y-gaps that are large enough to be inter-line
-    by_y = sorted(blocks, key=_top)
-    gaps = [_top(by_y[i + 1]) - _top(by_y[i]) for i in range(len(by_y) - 1)]
-    large_gaps = sorted(g for g in gaps if g >= 0.005)
-    line_height = large_gaps[len(large_gaps) // 2] if large_gaps else 0.012
-    step_tol = line_height * 0.4
-
-    # Phase 2 — chain: leftmost-first pop so descriptions always start chains
-    unassigned = sorted(blocks, key=lambda b: (_left(b), _top(b)))
-    rows: list[list] = []
-
-    while unassigned:
-        chain = [unassigned.pop(0)]
-        while True:
-            cur_x = _left(chain[-1])
-            cur_y = _top(chain[-1])
-            best: dict | None = None
-            best_dx = float("inf")
-            for b in unassigned:
-                bx = _left(b)
-                if bx <= cur_x:
-                    continue
-                if abs(_top(b) - cur_y) <= step_tol:
-                    dx = bx - cur_x
-                    if dx < best_dx:
-                        best_dx = dx
-                        best = b
-            if best is None:
-                break
-            chain.append(best)
-            unassigned.remove(best)
-        rows.append(chain)
-
-    rows.sort(key=lambda row: min(_top(b) for b in row))
+    rows, line_height, step_tol = group_blocks(blocks)
     lines = ["  ".join(b["Text"] for b in row) for row in rows]
     print(f"TEXTRACT lines={len(lines)} line_height={line_height:.4f} step_tol={step_tol:.4f}")
     return "\n".join(lines), lines, blocks, rows, line_height, step_tol
