@@ -15,7 +15,7 @@ PROC_DIR="$LAMBDA_DIR/processor"
 PKG_DIR="$PROC_DIR/package"
 rm -rf "$PKG_DIR"
 mkdir -p "$PKG_DIR"
-cp "$PROC_DIR/handler.py" "$PKG_DIR/"
+cp "$PROC_DIR/handler.py" "$PROC_DIR/line_grouping.py" "$PKG_DIR/"
 # --platform and --only-binary guarantee Lambda-compatible manylinux binary wheels.
 # Without this, pip may fall back to a source dist that won't work in the Lambda runtime.
 "$VENV/bin/pip" install -r "$PROC_DIR/requirements.txt" \
