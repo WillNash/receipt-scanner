@@ -436,7 +436,7 @@ function buildHistoryCard(job) {
       btn.className = "btn btn-secondary";
       btn.style.fontSize = "0.8rem";
       btn.textContent = "OCR debug";
-      btn.addEventListener("click", () => toggleOcrDebug(btn, job.textractDebugUrl, card));
+      btn.addEventListener("click", () => toggleOcrDebug(btn, job.textractDebugUrl, card, job.jobId));
       dl.appendChild(btn);
     }
     if (job.debugUrl) {
@@ -614,7 +614,7 @@ async function showEditModal(job) {
 
 // ── OCR debug panel ───────────────────────────────────────────────────────────
 
-async function toggleOcrDebug(btn, url, card) {
+async function toggleOcrDebug(btn, url, card, jobId) {
   const existing = card.querySelector(".ocr-debug-panel");
   if (existing) {
     existing.remove();
@@ -721,6 +721,14 @@ async function toggleOcrDebug(btn, url, card) {
       panel.appendChild(ol);
     }
 
+    // ── Download test fixture ─────────────────────────────────────────────────
+    const dlBtn = document.createElement("button");
+    dlBtn.className = "btn btn-secondary";
+    dlBtn.style.cssText = "margin-top:0.75rem;font-size:0.75rem;";
+    dlBtn.textContent = "Download test fixture (.py)";
+    dlBtn.addEventListener("click", () => downloadTestFixture(data, jobId));
+    panel.appendChild(dlBtn);
+
     card.appendChild(panel);
     btn.textContent = "Hide OCR";
   } catch (err) {
@@ -729,6 +737,51 @@ async function toggleOcrDebug(btn, url, card) {
   } finally {
     btn.disabled = false;
   }
+}
+
+function downloadTestFixture(data, jobId) {
+  const blocks = data.blocks || [];
+  const lines  = data.lines  || [];
+
+  // Align _block() calls on the top_pct column for readability
+  const maxTextLen = Math.max(...blocks.map(b => b.text.length), 0);
+
+  const blockLines = blocks.map(b => {
+    const escaped  = b.text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const topPct   = (b.top  * 100).toFixed(1);
+    const leftPct  = Math.round(b.left * 100);
+    const pad      = " ".repeat(maxTextLen - b.text.length);
+    return `    _block("${escaped}",${pad}  ${topPct.padStart(5)},  ${String(leftPct).padStart(2)}),`;
+  });
+
+  const expectedLines = lines.map(l => {
+    const escaped = l.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    return `    "${escaped}",`;
+  });
+
+  const shortId  = (jobId || "unknown").slice(0, 8);
+  const rowCount = lines.length;
+
+  const content = [
+    `# ${blocks.length} blocks → ${rowCount} rows`,
+    `# job_id: ${jobId || "unknown"}`,
+    ``,
+    `BLOCKS = [`,
+    ...blockLines,
+    `]`,
+    ``,
+    `EXPECTED = [`,
+    ...expectedLines,
+    `]`,
+  ].join("\n");
+
+  const blob = new Blob([content], { type: "text/x-python" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = `test_fixture_${shortId}.py`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── Event listeners ───────────────────────────────────────────────────────────
