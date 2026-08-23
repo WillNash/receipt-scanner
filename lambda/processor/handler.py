@@ -257,8 +257,8 @@ def _to_jpeg(data: bytes) -> bytes:
     return buf.tobytes()
 
 
-def _textract_lines(image_bytes: bytes) -> tuple[str, list[str], list]:
-    """Run Textract DetectDocumentText and return (full_text, lines, line_blocks) in reading order.
+def _textract_lines(image_bytes: bytes) -> tuple[str, list[str], list, list]:
+    """Run Textract DetectDocumentText and return (full_text, lines, line_blocks, rows).
 
     Groups blocks into rows by proximity then sorts left-to-right within each
     row, producing a layout-aware text representation of the receipt.
@@ -281,7 +281,33 @@ def _textract_lines(image_bytes: bytes) -> tuple[str, list[str], list]:
 
     lines = ["  ".join(b["Text"] for b in row) for row in rows]
     print(f"TEXTRACT lines={len(lines)}")
-    return "\n".join(lines), lines, blocks
+    return "\n".join(lines), lines, blocks, rows
+
+
+def _debug_block_list(blocks: list, rows: list) -> list:
+    """Slim Textract LINE blocks down to JSON-serialisable dicts, annotated with row index.
+
+    Blocks are in reading order (sorted by Top). The row index shows which blocks
+    were merged together by our ROW_GAP grouping: same row index = same merged line.
+    """
+    id_to_row = {}
+    for row_idx, row_blocks in enumerate(rows):
+        for block in row_blocks:
+            id_to_row[block["Id"]] = row_idx
+
+    result = []
+    for block in blocks:
+        bb = block["Geometry"]["BoundingBox"]
+        result.append({
+            "text":       block.get("Text", ""),
+            "confidence": round(block.get("Confidence", 0), 1),
+            "top":        round(bb["Top"],    4),
+            "left":       round(bb["Left"],   4),
+            "width":      round(bb["Width"],  4),
+            "height":     round(bb["Height"], 4),
+            "row":        id_to_row.get(block["Id"], -1),
+        })
+    return result
 
 
 def _compute_skew_angle(blocks: list) -> float | None:
@@ -335,14 +361,15 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
         raw = image_data or s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         data = _to_jpeg(raw)
 
-    receipt_text, receipt_lines, textract_blocks = _textract_lines(data)
+    receipt_text, receipt_lines, textract_blocks, textract_rows = _textract_lines(data)
 
     skew = _compute_skew_angle(textract_blocks)
     SKEW_THRESHOLD = 1.0  # degrees — below this, noise outweighs benefit
-    if skew is not None and SKEW_THRESHOLD < abs(skew) <= 30.0:
+    deskew_applied = skew is not None and SKEW_THRESHOLD < abs(skew) <= 30.0
+    if deskew_applied:
         print(f"DESKEW angle={skew:.2f}° — rotating and re-running Textract")
         data = _deskew_image(data, -skew)
-        receipt_text, receipt_lines, _ = _textract_lines(data)
+        receipt_text, receipt_lines, textract_blocks, textract_rows = _textract_lines(data)
     else:
         print(f"DESKEW skew={skew:.2f}° — no correction needed" if skew is not None else "DESKEW insufficient lines")
 
@@ -424,7 +451,15 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
     if price_check["warning"]:
         print(f"PRICE_CHECK_WARNING {price_check}")
 
-    textract_debug_key = save_debug(job_id, user_id, {"lines": receipt_lines}, suffix="_textract")
+    textract_debug_key = save_debug(job_id, user_id, {
+        "deskew": {
+            "angle_deg": round(skew, 3) if skew is not None else None,
+            "applied": deskew_applied,
+            "threshold_deg": SKEW_THRESHOLD,
+        },
+        "blocks": _debug_block_list(textract_blocks, textract_rows),
+        "lines": receipt_lines,
+    }, suffix="_textract")
     claude_debug_key = save_debug(job_id, user_id, {
         "model": BEDROCK_MODEL_ID,
         "extracted": extracted,

@@ -421,15 +421,31 @@ function buildHistoryCard(job) {
 
   if (job.textractDebugUrl || job.debugUrl || job.croppedImageUrl) {
     const dl = document.createElement("div");
-    dl.style.cssText = "margin-top:0.5rem;display:flex;gap:0.5rem;flex-wrap:wrap";
+    dl.style.cssText = "margin-top:0.5rem;display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center";
+
     if (job.croppedImageUrl) {
-      dl.innerHTML += `<a href="${escapeHtml(job.croppedImageUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Cropped image</a>`;
+      const a = document.createElement("a");
+      a.href = job.croppedImageUrl;
+      a.className = "btn btn-secondary";
+      a.style.fontSize = "0.8rem";
+      a.textContent = "Cropped image";
+      dl.appendChild(a);
     }
     if (job.textractDebugUrl) {
-      dl.innerHTML += `<a href="${escapeHtml(job.textractDebugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Raw OCR (Textract)</a>`;
+      const btn = document.createElement("button");
+      btn.className = "btn btn-secondary";
+      btn.style.fontSize = "0.8rem";
+      btn.textContent = "OCR debug";
+      btn.addEventListener("click", () => toggleOcrDebug(btn, job.textractDebugUrl, card));
+      dl.appendChild(btn);
     }
     if (job.debugUrl) {
-      dl.innerHTML += `<a href="${escapeHtml(job.debugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">AI parsed (Haiku)</a>`;
+      const a = document.createElement("a");
+      a.href = job.debugUrl;
+      a.className = "btn btn-secondary";
+      a.style.fontSize = "0.8rem";
+      a.textContent = "AI extraction JSON";
+      dl.appendChild(a);
     }
     card.appendChild(dl);
   }
@@ -594,6 +610,114 @@ async function showEditModal(job) {
       alert("Failed to save: " + err.message);
     }
   });
+}
+
+// ── OCR debug panel ───────────────────────────────────────────────────────────
+
+async function toggleOcrDebug(btn, url, card) {
+  const existing = card.querySelector(".ocr-debug-panel");
+  if (existing) {
+    existing.remove();
+    btn.textContent = "OCR debug";
+    return;
+  }
+
+  btn.textContent = "Loading…";
+  btn.disabled = true;
+
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+
+    const panel = document.createElement("div");
+    panel.className = "ocr-debug-panel";
+
+    // ── Deskew row ────────────────────────────────────────────────────────────
+    const deskew = data.deskew;
+    const deskewRow = document.createElement("div");
+    deskewRow.className = "debug-deskew-row";
+    if (deskew) {
+      const angle = deskew.angle_deg != null
+        ? `${deskew.angle_deg.toFixed(2)}°`
+        : "insufficient lines for detection";
+      const applied = deskew.applied
+        ? `corrected (threshold ±${deskew.threshold_deg}°)`
+        : `within threshold (±${deskew.threshold_deg}°), no correction`;
+      deskewRow.textContent = `Deskew: ${angle} — ${applied}`;
+      deskewRow.classList.add(deskew.applied ? "debug-deskew--corrected" : "debug-deskew--ok");
+    } else {
+      deskewRow.textContent = "Deskew: no data (scan predates this feature)";
+      deskewRow.classList.add("debug-deskew--ok");
+    }
+    panel.appendChild(deskewRow);
+
+    // ── Blocks table (pre-grouping) ───────────────────────────────────────────
+    const blocks = data.blocks;
+    if (blocks && blocks.length > 0) {
+      const bHeading = document.createElement("div");
+      bHeading.className = "debug-lines-heading";
+      bHeading.textContent = `Textract blocks — ${blocks.length} blocks → ${(blocks[blocks.length - 1].row + 1)} rows`;
+      panel.appendChild(bHeading);
+
+      const table = document.createElement("table");
+      table.className = "debug-blocks-table";
+
+      let lastRow = -1;
+      blocks.forEach(block => {
+        if (block.row !== lastRow && lastRow !== -1) {
+          const sep = table.insertRow();
+          sep.className = "debug-row-sep";
+          sep.insertCell().colSpan = 3;
+        }
+        lastRow = block.row;
+
+        const tr = table.insertRow();
+        const lowConf = block.confidence < 85;
+        if (lowConf) tr.className = "debug-block--low-conf";
+
+        const confTd = tr.insertCell();
+        confTd.className = "debug-block-conf";
+        confTd.textContent = `${block.confidence.toFixed(0)}%`;
+
+        const textTd = tr.insertCell();
+        textTd.className = "debug-block-text";
+        textTd.textContent = block.text;
+
+        const posTd = tr.insertCell();
+        posTd.className = "debug-block-pos";
+        posTd.textContent = `↕${(block.top * 100).toFixed(1)}% ←${(block.left * 100).toFixed(0)}%`;
+      });
+      panel.appendChild(table);
+    }
+
+    // ── Merged lines (what Claude receives) ───────────────────────────────────
+    const lines = data.lines || [];
+    if (lines.length > 0) {
+      const lHeading = document.createElement("div");
+      lHeading.className = "debug-lines-heading";
+      lHeading.style.marginTop = "0.6rem";
+      lHeading.textContent = `Merged text sent to Claude (${lines.length} lines)`;
+      panel.appendChild(lHeading);
+
+      const ol = document.createElement("ol");
+      ol.className = "debug-lines";
+      lines.forEach(line => {
+        const li = document.createElement("li");
+        li.textContent = line;
+        ol.appendChild(li);
+      });
+      panel.appendChild(ol);
+    }
+
+    card.appendChild(panel);
+    btn.textContent = "Hide OCR";
+  } catch (err) {
+    console.error("OCR debug load failed:", err);
+    btn.textContent = "OCR debug";
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ── Event listeners ───────────────────────────────────────────────────────────
