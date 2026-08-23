@@ -267,15 +267,18 @@ def _textract_lines(image_bytes: bytes) -> tuple[str, list[str], list, list]:
     blocks = [b for b in resp["Blocks"] if b["BlockType"] == "LINE"]
     blocks.sort(key=lambda b: b["Geometry"]["BoundingBox"]["Top"])
 
-    ROW_GAP = 0.012  # fraction of page height — blocks closer than this are the same row
+    ROW_GAP = 0.010  # fraction of page height — blocks closer than this are the same row
     rows: list[list] = []
     current: list = []
+    prev_top: float | None = None
     for block in blocks:
-        if not current or block["Geometry"]["BoundingBox"]["Top"] - current[0]["Geometry"]["BoundingBox"]["Top"] < ROW_GAP:
+        top = block["Geometry"]["BoundingBox"]["Top"]
+        if prev_top is None or top - prev_top < ROW_GAP:
             current.append(block)
         else:
             rows.append(sorted(current, key=lambda b: b["Geometry"]["BoundingBox"]["Left"]))
             current = [block]
+        prev_top = top
     if current:
         rows.append(sorted(current, key=lambda b: b["Geometry"]["BoundingBox"]["Left"]))
 
