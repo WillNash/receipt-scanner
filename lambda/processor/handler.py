@@ -338,6 +338,29 @@ def _compute_skew_angle(blocks: list) -> float | None:
     return float(np.median(angles))
 
 
+def _deskew_correction(skew: float | None, threshold: float) -> float | None:
+    """Return the correction angle to pass to _deskew_image, or None if no correction needed.
+
+    Handles three valid cases:
+      • Small skew  (threshold < |skew| ≤ 30°): correct with the exact measured angle.
+      • Near ±90°   (|skew| within 10° of 90°): snap to exactly ±90° (portrait/landscape swap).
+      • Near ±180°  (|skew| within 10° of 180°): snap to exactly ±180° (upside-down image).
+
+    Angles in the 30–80° and 100–170° bands are ambiguous (likely detection noise) and skipped.
+    """
+    if skew is None:
+        return None
+    abs_skew = abs(skew)
+    if abs_skew < threshold:
+        return None
+    if abs_skew <= 30.0:
+        return skew
+    nearest_90 = round(skew / 90) * 90
+    if nearest_90 != 0 and abs(skew - nearest_90) <= 10.0:
+        return float(nearest_90)
+    return None
+
+
 def _deskew_image(image_bytes: bytes, angle_deg: float) -> bytes:
     """Rotate image by angle_deg degrees counter-clockwise. Expands canvas to avoid clipping.
     Falls back to original bytes if decoding fails."""
@@ -372,13 +395,14 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
 
     skew = _compute_skew_angle(textract_blocks)
     SKEW_THRESHOLD = 1.0  # degrees — below this, noise outweighs benefit
-    deskew_applied = skew is not None and SKEW_THRESHOLD < abs(skew) <= 30.0
+    correction = _deskew_correction(skew, SKEW_THRESHOLD)
+    deskew_applied = correction is not None
     if deskew_applied:
-        print(f"DESKEW angle={skew:.2f}° — rotating and re-running Textract")
-        data = _deskew_image(data, -skew)
+        print(f"DESKEW angle={skew:.2f}° correction={correction:.1f}° — rotating and re-running Textract")
+        data = _deskew_image(data, -correction)
         receipt_text, receipt_lines, textract_blocks, textract_rows, line_height, step_tol = _textract_lines(data)
     else:
-        print(f"DESKEW skew={skew:.2f}° — no correction needed" if skew is not None else "DESKEW insufficient lines")
+        print(f"DESKEW skew={skew:.2f}° — no correction" if skew is not None else "DESKEW insufficient lines")
 
     response = bedrock.converse(
         modelId=BEDROCK_MODEL_ID,
@@ -466,6 +490,7 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
     textract_debug_key = save_debug(job_id, user_id, {
         "deskew": {
             "angle_deg": round(skew, 3) if skew is not None else None,
+            "correction_deg": round(correction, 1) if correction is not None else None,
             "applied": deskew_applied,
             "threshold_deg": SKEW_THRESHOLD,
         },

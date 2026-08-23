@@ -49,7 +49,41 @@ async function exchangeCode(code) {
   const data = await resp.json();
   sessionStorage.setItem("id_token", data.id_token);
   sessionStorage.setItem("access_token", data.access_token);
+  if (data.refresh_token) sessionStorage.setItem("refresh_token", data.refresh_token);
   history.replaceState({}, document.title, window.location.pathname);
+}
+
+async function refreshTokens() {
+  const refreshToken = sessionStorage.getItem("refresh_token");
+  if (!refreshToken) throw new Error("No refresh token");
+  const params = new URLSearchParams({
+    grant_type:    "refresh_token",
+    client_id:     CONFIG.cognitoClientId,
+    refresh_token: refreshToken,
+  });
+  const resp = await fetch(CONFIG.cognitoTokenUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
+  });
+  if (!resp.ok) throw new Error(`Token refresh failed: ${resp.status}`);
+  const data = await resp.json();
+  sessionStorage.setItem("id_token", data.id_token);
+  sessionStorage.setItem("access_token", data.access_token);
+}
+
+async function apiFetch(url, options = {}) {
+  const authHeaders = { "Authorization": `Bearer ${getToken()}` };
+  const resp = await fetch(url, { ...options, headers: { ...authHeaders, ...options.headers } });
+  if (resp.status !== 401) return resp;
+  try {
+    await refreshTokens();
+  } catch (_) {
+    logout();
+    return resp;
+  }
+  const retryHeaders = { "Authorization": `Bearer ${getToken()}` };
+  return fetch(url, { ...options, headers: { ...retryHeaders, ...options.headers } });
 }
 
 // ── Initialisation ────────────────────────────────────────────────────────────
@@ -238,12 +272,9 @@ async function handleUpload() {
     // Step 1 — get presigned URLs in parallel
     const urlResults = await Promise.all(
       filesToProcess.map(file =>
-        fetch(`${CONFIG.apiBaseUrl}/upload-url`, {
+        apiFetch(`${CONFIG.apiBaseUrl}/upload-url`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${getToken()}`,
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ contentType: file.type }),
         }).then(async r => {
           if (!r.ok) {
@@ -302,10 +333,7 @@ async function pollUntilDone(jobId, signal, count = 0) {
   if (signal && signal.aborted) return { jobId, status: "CANCELLED" };
   if (count >= MAX_POLLS) return { jobId, status: "FAILED", reason: "timeout" };
   try {
-    const resp = await fetch(`${CONFIG.apiBaseUrl}/jobs/${jobId}`, {
-      headers: { "Authorization": `Bearer ${getToken()}` },
-      signal,
-    });
+    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/jobs/${jobId}`, { signal });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const job = await resp.json();
     if (job.status === "COMPLETE" || job.status === "FAILED") return job;
@@ -391,9 +419,7 @@ function buildReceiptCard(job) {
 
 async function loadHistory() {
   try {
-    const resp = await fetch(`${CONFIG.apiBaseUrl}/receipts`, {
-      headers: { "Authorization": `Bearer ${getToken()}` },
-    });
+    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts`);
     if (!resp.ok) return;
     const data = await resp.json();
     renderHistory(data.receipts || []);
@@ -597,9 +623,9 @@ async function showEditModal(job) {
     saveBtn.disabled = true;
     saveBtn.textContent = "Saving…";
     try {
-      const resp = await fetch(`${CONFIG.apiBaseUrl}/receipts/${job.jobId}`, {
+      const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts/${job.jobId}`, {
         method: "PATCH",
-        headers: { "Authorization": `Bearer ${getToken()}`, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ vendor, receiptDate, items: editItems }),
       });
       if (!resp.ok) throw new Error(await resp.text());
@@ -642,9 +668,20 @@ async function toggleOcrDebug(btn, url, card, jobId) {
       const angle = deskew.angle_deg != null
         ? `${deskew.angle_deg.toFixed(2)}°`
         : "insufficient lines for detection";
-      const applied = deskew.applied
-        ? `corrected (threshold ±${deskew.threshold_deg}°)`
-        : `within threshold (±${deskew.threshold_deg}°), no correction`;
+      let applied;
+      if (deskew.applied) {
+        const snap = deskew.correction_deg != null ? ` → snapped to ${deskew.correction_deg}°` : "";
+        applied = `corrected${snap}`;
+      } else if (deskew.angle_deg == null) {
+        applied = "insufficient lines for detection";
+      } else {
+        const absAngle = Math.abs(deskew.angle_deg);
+        if (absAngle < deskew.threshold_deg) {
+          applied = `below threshold (±${deskew.threshold_deg}°), no correction`;
+        } else {
+          applied = `outside correction range — no correction`;
+        }
+      }
       deskewRow.textContent = `Deskew: ${angle} — ${applied}`;
       deskewRow.classList.add(deskew.applied ? "debug-deskew--corrected" : "debug-deskew--ok");
     } else {
