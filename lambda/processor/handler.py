@@ -257,34 +257,61 @@ def _to_jpeg(data: bytes) -> bytes:
     return buf.tobytes()
 
 
-def _textract_lines(image_bytes: bytes) -> tuple[str, list[str], list, list]:
+def _textract_lines(image_bytes: bytes) -> tuple[str, list[str], list, list, float, float]:
     """Run Textract DetectDocumentText and return (full_text, lines, line_blocks, rows).
 
-    Groups blocks into rows by proximity then sorts left-to-right within each
-    row, producing a layout-aware text representation of the receipt.
+    Two-phase algorithm:
+    1. Calibrate: derive the receipt's line height from the distribution of
+       consecutive Y-gaps, avoiding any hardcoded page-fraction threshold.
+    2. Chain: pop the leftmost unassigned block, then walk right — each step
+       uses a rolling Y-tolerance anchored to the current block, so the window
+       follows any curvature rather than drifting from the row's origin.
     """
     resp = textract.detect_document_text(Document={"Bytes": image_bytes})
     blocks = [b for b in resp["Blocks"] if b["BlockType"] == "LINE"]
-    blocks.sort(key=lambda b: b["Geometry"]["BoundingBox"]["Top"])
 
-    ROW_GAP = 0.010  # fraction of page height — blocks closer than this are the same row
+    if not blocks:
+        return "", [], [], [], 0.0, 0.0
+
+    def _top(b):  return b["Geometry"]["BoundingBox"]["Top"]
+    def _left(b): return b["Geometry"]["BoundingBox"]["Left"]
+
+    # Phase 1 — calibrate: median of Y-gaps that are large enough to be inter-line
+    by_y = sorted(blocks, key=_top)
+    gaps = [_top(by_y[i + 1]) - _top(by_y[i]) for i in range(len(by_y) - 1)]
+    large_gaps = sorted(g for g in gaps if g >= 0.005)
+    line_height = large_gaps[len(large_gaps) // 2] if large_gaps else 0.012
+    step_tol = line_height * 0.4
+
+    # Phase 2 — chain: leftmost-first pop so descriptions always start chains
+    unassigned = sorted(blocks, key=lambda b: (_left(b), _top(b)))
     rows: list[list] = []
-    current: list = []
-    prev_top: float | None = None
-    for block in blocks:
-        top = block["Geometry"]["BoundingBox"]["Top"]
-        if prev_top is None or top - prev_top < ROW_GAP:
-            current.append(block)
-        else:
-            rows.append(sorted(current, key=lambda b: b["Geometry"]["BoundingBox"]["Left"]))
-            current = [block]
-        prev_top = top
-    if current:
-        rows.append(sorted(current, key=lambda b: b["Geometry"]["BoundingBox"]["Left"]))
+
+    while unassigned:
+        chain = [unassigned.pop(0)]
+        while True:
+            cur_x = _left(chain[-1])
+            cur_y = _top(chain[-1])
+            best: dict | None = None
+            best_dx = float("inf")
+            for b in unassigned:
+                bx = _left(b)
+                if bx <= cur_x:
+                    continue
+                if abs(_top(b) - cur_y) <= step_tol:
+                    dx = bx - cur_x
+                    if dx < best_dx:
+                        best_dx = dx
+                        best = b
+            if best is None:
+                break
+            chain.append(best)
+            unassigned.remove(best)
+        rows.append(chain)
 
     lines = ["  ".join(b["Text"] for b in row) for row in rows]
-    print(f"TEXTRACT lines={len(lines)}")
-    return "\n".join(lines), lines, blocks, rows
+    print(f"TEXTRACT lines={len(lines)} line_height={line_height:.4f} step_tol={step_tol:.4f}")
+    return "\n".join(lines), lines, blocks, rows, line_height, step_tol
 
 
 def _debug_block_list(blocks: list, rows: list) -> list:
@@ -364,7 +391,7 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
         raw = image_data or s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         data = _to_jpeg(raw)
 
-    receipt_text, receipt_lines, textract_blocks, textract_rows = _textract_lines(data)
+    receipt_text, receipt_lines, textract_blocks, textract_rows, line_height, step_tol = _textract_lines(data)
 
     skew = _compute_skew_angle(textract_blocks)
     SKEW_THRESHOLD = 1.0  # degrees — below this, noise outweighs benefit
@@ -372,7 +399,7 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
     if deskew_applied:
         print(f"DESKEW angle={skew:.2f}° — rotating and re-running Textract")
         data = _deskew_image(data, -skew)
-        receipt_text, receipt_lines, textract_blocks, textract_rows = _textract_lines(data)
+        receipt_text, receipt_lines, textract_blocks, textract_rows, line_height, step_tol = _textract_lines(data)
     else:
         print(f"DESKEW skew={skew:.2f}° — no correction needed" if skew is not None else "DESKEW insufficient lines")
 
@@ -459,6 +486,10 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
             "angle_deg": round(skew, 3) if skew is not None else None,
             "applied": deskew_applied,
             "threshold_deg": SKEW_THRESHOLD,
+        },
+        "row_grouping": {
+            "line_height": round(line_height, 4),
+            "step_tol": round(step_tol, 4),
         },
         "blocks": _debug_block_list(textract_blocks, textract_rows),
         "lines": receipt_lines,

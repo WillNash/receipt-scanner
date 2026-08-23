@@ -232,7 +232,7 @@ class _EditReceiptSheetState extends State<_EditReceiptSheet> {
     final total = _parseAmount(widget.job.total ?? '');
     if (total == null) return (sum: sum, total: null, warn: false);
     final diff = (sum - total).abs();
-    final warn = diff > 0.10 && total > 0 && diff / total > 0.01;
+    final warn = diff > 0.01 && total > 0;
     return (sum: sum, total: total, warn: warn);
   }
 

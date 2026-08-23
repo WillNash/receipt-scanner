@@ -514,7 +514,7 @@ async function showEditModal(job) {
     });
     sum = Math.round(sum * 100) / 100;
     const diff = Math.round((sum - receiptTotal) * 100) / 100;
-    const ok = Math.abs(diff) <= 0.10;
+    const ok = Math.abs(diff) <= 0.01;
     bar.style.background = ok ? "#e8f5e9" : "#fff3e0";
     bar.style.color = ok ? "#2e7d32" : "#e65100";
     bar.textContent = `Items sum: $${sum.toFixed(2)} / Receipt total: $${receiptTotal.toFixed(2)}`
@@ -651,6 +651,17 @@ async function toggleOcrDebug(btn, url, card) {
       deskewRow.classList.add("debug-deskew--ok");
     }
     panel.appendChild(deskewRow);
+
+    // ── Row-grouping calibration row ──────────────────────────────────────────
+    const rg = data.row_grouping;
+    if (rg) {
+      const rgRow = document.createElement("div");
+      rgRow.className = "debug-deskew-row debug-deskew--ok";
+      const lhPct = (rg.line_height * 100).toFixed(2);
+      const stPct = (rg.step_tol * 100).toFixed(2);
+      rgRow.textContent = `Row grouping: line height ${lhPct}%  step tolerance ${stPct}%`;
+      panel.appendChild(rgRow);
+    }
 
     // ── Blocks table (pre-grouping) ───────────────────────────────────────────
     const blocks = data.blocks;
