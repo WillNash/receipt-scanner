@@ -86,9 +86,19 @@ RECEIPT_TOOL = {
                                 "quantity": {
                                     "type": "string",
                                     "description": (
-                                        "Number of units purchased. "
-                                        "If the receipt shows '2 @ $1.79', quantity is '2'. "
-                                        "For weight-based items e.g. '1.5 Kg @ $2.99/Kg', quantity is '1.5 Kg'."
+                                        "Pure numeric count or measured weight — no units. "
+                                        "quantity × unit_price must equal price. "
+                                        "Examples: '2' for two units, '1.741' for 1.741 kg of a weight-priced item. "
+                                        "For a fixed-price item like 'PAMS CHEESE BLOCK 1KG' bought once: quantity is '1'."
+                                    ),
+                                },
+                                "package_size": {
+                                    "type": "string",
+                                    "description": (
+                                        "Size or weight label from the product name for fixed-price items "
+                                        "(e.g. '1KG', '500G', '2L', '750ML', '400G'). "
+                                        "Set only when the weight/volume is part of the product's brand name, "
+                                        "not for weight-priced items sold by the kg/g where quantity carries the weight."
                                     ),
                                 },
                                 "unit_price": {
@@ -385,10 +395,15 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
                             "Include every purchased product as a line item. "
                             "Exclude summary lines such as subtotal, GST, EFTPOS, cash, and change. "
                             "Return all prices and totals without currency symbols. "
+                            "quantity is always a bare number — no units. "
+                            "quantity × unit_price must equal price. "
                             "For multi-unit lines like 'ITEM NAME  $price' followed by '2 @  $1.79', "
                             "set quantity to '2', unit_price to '1.79', price to the line total. "
-                            "For weight-based lines like '1.741 Kg @  $1.49/Kg', "
-                            "set quantity to '1.741 Kg', unit_price to '1.49'. "
+                            "For weight-priced lines like '1.741 Kg @  $1.49/Kg', "
+                            "set quantity to '1.741', unit_price to '1.49'. "
+                            "For fixed-price items whose product name includes a weight/size (e.g. 'PAMS CHEESE BLOCK 1KG'), "
+                            "set quantity to '1' (or the count bought), unit_price to the item price, "
+                            "and package_size to the size label from the product name (e.g. '1KG'). "
                             "A line that contains only a number, an '@' or similar separator, and a price "
                             "(e.g. '3 @ $0.89', '2 @ $1.79 $3.58') is a quantity/unit-price breakdown "
                             "for the item on the line immediately above — update that item's quantity and "
@@ -768,6 +783,10 @@ def write_line_items(
             n = to_n(item.get(field))
             if n:
                 record[field] = n
+
+        pkg_size = item.get("package_size", "").strip()
+        if pkg_size:
+            record["package_size"] = {"S": pkg_size}
 
         item_category = item.get("item_category", "other")
         if item_category in VALID_ITEM_CATEGORIES:

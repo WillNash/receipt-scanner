@@ -257,6 +257,8 @@ header h1 {
 .items-table th:nth-child(3),
 .items-table th:nth-child(4) { text-align: right; }
 
+.pkg-size { font-size: 0.75em; color: #888; margin-left: 0.3em; }
+
 .failed-text { color: var(--danger); font-size: var(--text-base); }
 
 /* History section */

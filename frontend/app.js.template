@@ -355,7 +355,7 @@ function buildReceiptCard(job) {
       <tbody>
         ${items.map(it => `
           <tr>
-            <td>${escapeHtml(it.description)}</td>
+            <td>${escapeHtml(it.description)}${it.package_size ? ` <span class="pkg-size">${escapeHtml(it.package_size)}</span>` : ""}</td>
             <td>${escapeHtml(it.quantity)}</td>
             <td>${escapeHtml(it.unit_price)}</td>
             ${hasDiscount ? `<td>${it.discount ? escapeHtml(it.discount) : ""}</td>` : ""}
@@ -562,10 +562,11 @@ async function showEditModal(job) {
       const numRow = document.createElement("div");
       numRow.style.cssText = "display:flex;gap:0.3rem";
       const numFields = [
-        { key: "quantity",   label: "Qty",        w: "20%" },
-        { key: "unit_price", label: "Unit price",  w: "25%" },
-        { key: "price",      label: "Price",       w: "25%" },
-        { key: "discount",   label: "Discount",    w: "25%" },
+        { key: "quantity",     label: "Qty",        w: "15%" },
+        { key: "package_size", label: "Pkg size",   w: "15%", text: true },
+        { key: "unit_price",   label: "Unit price", w: "22%" },
+        { key: "price",        label: "Price",      w: "22%" },
+        { key: "discount",     label: "Discount",   w: "22%" },
       ];
       numFields.forEach(({ key, label, w }) => {
         const inp = makeInput(label, it[key], w, v => { editItems[i][key] = v; if (key === "price") updatePriceSum(); });
@@ -580,7 +581,7 @@ async function showEditModal(job) {
   renderItems();
 
   modal.querySelector("#add-item-btn").addEventListener("click", () => {
-    editItems.push({ description: "", quantity: "", unit_price: "", price: "", discount: "" });
+    editItems.push({ description: "", quantity: "", package_size: "", unit_price: "", price: "", discount: "" });
     renderItems();
   });
 

@@ -132,6 +132,7 @@ class _EditableItem {
   _EditableItem({
     String desc = '',
     String qty = '',
+    String packageSize = '',
     String unitPrice = '',
     String price = '',
     String discount = '',
@@ -139,6 +140,7 @@ class _EditableItem {
     this.novaGroup,
   })  : descCtrl = TextEditingController(text: desc),
         qtyCtrl = TextEditingController(text: qty),
+        packageSizeCtrl = TextEditingController(text: packageSize),
         unitPriceCtrl = TextEditingController(text: unitPrice),
         priceCtrl = TextEditingController(text: price),
         discountCtrl = TextEditingController(text: discount);
@@ -146,6 +148,7 @@ class _EditableItem {
   factory _EditableItem.fromLineItem(LineItem item) => _EditableItem(
         desc: item.description,
         qty: item.quantity ?? '',
+        packageSize: item.packageSize ?? '',
         unitPrice: item.unitPrice ?? '',
         price: item.price ?? '',
         discount: item.discount ?? '',
@@ -155,6 +158,7 @@ class _EditableItem {
 
   final TextEditingController descCtrl;
   final TextEditingController qtyCtrl;
+  final TextEditingController packageSizeCtrl;
   final TextEditingController unitPriceCtrl;
   final TextEditingController priceCtrl;
   final TextEditingController discountCtrl;
@@ -164,6 +168,7 @@ class _EditableItem {
   void dispose() {
     descCtrl.dispose();
     qtyCtrl.dispose();
+    packageSizeCtrl.dispose();
     unitPriceCtrl.dispose();
     priceCtrl.dispose();
     discountCtrl.dispose();
@@ -172,10 +177,12 @@ class _EditableItem {
   Map<String, dynamic> toJson() {
     final map = <String, dynamic>{'description': descCtrl.text.trim()};
     final qty = qtyCtrl.text.trim();
+    final pkgSize = packageSizeCtrl.text.trim();
     final up = unitPriceCtrl.text.trim();
     final price = priceCtrl.text.trim();
     final discount = discountCtrl.text.trim();
     if (qty.isNotEmpty) map['quantity'] = qty;
+    if (pkgSize.isNotEmpty) map['package_size'] = pkgSize;
     if (up.isNotEmpty) map['unit_price'] = up;
     if (price.isNotEmpty) map['price'] = price;
     if (discount.isNotEmpty) map['discount'] = discount;
@@ -390,6 +397,8 @@ class _EditReceiptSheetState extends State<_EditReceiptSheet> {
           children: [
             Expanded(flex: 2, child: _numField(item.qtyCtrl, 'Qty')),
             const SizedBox(width: 4),
+            Expanded(flex: 2, child: _textField(item.packageSizeCtrl, 'Pkg size')),
+            const SizedBox(width: 4),
             Expanded(
                 flex: 3, child: _numField(item.unitPriceCtrl, 'Unit price')),
             const SizedBox(width: 4),
@@ -408,6 +417,15 @@ class _EditReceiptSheetState extends State<_EditReceiptSheet> {
       ],
     );
   }
+
+  Widget _textField(TextEditingController ctrl, String label) => TextField(
+        controller: ctrl,
+        decoration: InputDecoration(
+          labelText: label,
+          border: const OutlineInputBorder(),
+          isDense: true,
+        ),
+      );
 
   Widget _numField(
     TextEditingController ctrl,

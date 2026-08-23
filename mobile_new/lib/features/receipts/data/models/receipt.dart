@@ -2,6 +2,7 @@ class LineItem {
   const LineItem({
     required this.description,
     this.quantity,
+    this.packageSize,
     this.unitPrice,
     this.price,
     this.discount,
@@ -11,6 +12,7 @@ class LineItem {
 
   final String description;
   final String? quantity;
+  final String? packageSize;
   final String? unitPrice;
   final String? price;
   final String? discount;
@@ -20,6 +22,7 @@ class LineItem {
   factory LineItem.fromJson(Map<String, dynamic> json) => LineItem(
         description: json['description'] as String? ?? '',
         quantity: json['quantity'] as String?,
+        packageSize: json['package_size'] as String?,
         unitPrice: json['unit_price'] as String?,
         price: json['price'] as String?,
         discount: json['discount'] as String?,
