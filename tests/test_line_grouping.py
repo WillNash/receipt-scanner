@@ -311,5 +311,191 @@ class TestGroupBlocks(unittest.TestCase):
         self.assertEqual(st, 0.0)
 
 
+# ---------------------------------------------------------------------------
+# Fixture: PAK'nSAVE Palmerston North, 16 May 2026 (84 blocks, 54 rows)
+# Lower-quality scan: more OCR errors, larger description-to-price Y offsets
+# (up to 0.4%), and a 3-block header row at the same Y.
+# ---------------------------------------------------------------------------
+PAKNSAVE_20260516 = [
+    _block("ASAVE",                                            4.3,  42),
+    _block("****",                                             8.7,  26),
+    _block("PAR",                                              8.6,  33),
+    _block("PALMERSTON NORTH",                                 8.6,  46),
+    _block("FERGUSON STREET",                                  9.8,  41),
+    _block("SOBRO LIMITED",                                   11.0,  40),
+    _block("PH: 06) 356-4043",                                12.2,  37),
+    _block("Order online and collect-trom the store",         14.4,  22),
+    _block("Go to paknsave.co.nz/shop",                       15.7,  31),
+    _block("KIA KAHA. STRESSED OR OVERWHELMED?",              16.8,  26),
+    _block("CALL OR TEXT 1737 FOR FREE KORERO",               18.0,  26),
+    _block("CINCERELLA ALMOND MEAL 400G",                     19.1,  14),
+    _block("$12.39",                                          19.3,  77),
+    _block("FRE (AS BREAD MIXED GRAIN /50G",                  20.2,  13),
+    _block("$4.37",                                           20.5,  79),
+    _block("YAS BREAD SOYA / LINSEED 7506",                   21.4,  16),
+    _block("$4.37",                                           21.7,  79),
+    _block("BARRAWAYS ROLLED GATS ORG 8006",                  22.6,  13),
+    _block("$8.19",                                           22.8,  79),
+    _block("PALMERSION NORTH COUNCIL RUBBISH BAG.5S",         23.7,  13),
+    _block("$19.00",                                          24.0,  77),
+    _block("PAMS DATES 400G",                                 24.8,  13),
+    _block("$2.69",                                           25.2,  78),
+    _block("PAMS DESIDCATED COCONUT 2506",                    26.0,  13),
+    _block("$3.75",                                           26.3,  79),
+    _block("PAMS WASH VANILLA REFILL 1L",                     27.2,  13),
+    _block("2@",                                              28.5,  26),
+    _block("$4.49",                                           28.5,  38),
+    _block("$8.98",                                           28.6,  78),
+    _block("PAMS PLANT BASED SOY MILK REGULAR IL",            29.6,  13),
+    _block("20",                                              30.9,  25),
+    _block("$2.49",                                           30.9,  38),
+    _block("$4.98",                                           31.0,  78),
+    _block("TUX ADULT ORIGINAL MEATY 8KG",                    32.0,  14),
+    _block("$34.99",                                          32.2,  77),
+    _block("CABBAGE GREEN",                                   33.2,  13),
+    _block("$2.99",                                           33.3,  78),
+    _block("CLERY",                                           34.4,  13),
+    _block("$2.99",                                           34.5,  78),
+    _block("PAMS VALUE MILK STANDARD 4",                      35.5,  13),
+    _block("$4.38",                                           35.7,  78),
+    _block("is BALANCE DUE",                                  38.0,  14),
+    _block("$114.57",                                         38.0,  75),
+    _block("EFTPOS",                                          39.1,  17),
+    _block("$114.57",                                         39.2,  75),
+    _block("SUBTOTAL",                                        42.5,  17),
+    _block("$99.63",                                          42.7,  76),
+    _block("TOTAL GST",                                       43.8,  17),
+    _block("$14.94",                                          43.9,  76),
+    _block("TOTAL",                                           45.0,  17),
+    _block("$114",                                            45.1,  75),
+    _block("CHANGE",                                          47.3,  12),
+    _block("$0.00",                                           47.5,  78),
+    _block("PAK N SAVE PALMERSTO",                            49.5,  10),
+    _block("327 FERGUSON STREET",                             50.7,  10),
+    _block("PALMERSTON NORTH",                                51.9,  10),
+    _block("EFTPOS",                                          54.4,  25),
+    _block("TERM:NAL",                                        55.5,  10),
+    _block("04155063",                                        55.6,  39),
+    _block("TIME",                                            56.7,  10),
+    _block("16May26 15:42",                                   56.7,  33),
+    _block("TRAN 071792",                                     57.8,  10),
+    _block("CHEQUE",                                          57.9,  42),
+    _block("EFTPOS",                                          59.0,   9),
+    _block("CARD",                                            60.2,   9),
+    _block("8996",                                            60.3,  44),
+    _block("PURCHASE",                                        61.5,   9),
+    _block("NZD114.57",                                       61.5,  38),
+    _block("TOTAL",                                           62.6,   9),
+    _block("NZD114.57",                                       62.6,  38),
+    _block("ACCEPTED",                                        65.0,  24),
+    _block("CUSTOMER COPY",                                   68.5,  20),
+    _block("CASHIER NAME: SCO Cashier",                       69.7,  12),
+    _block("16/05/2026 15:42:28 05082 0212",                  70.9,  12),
+    _block("TAX",                                             72.1,  40),
+    _block("INVOICE",                                         72.1,  46),
+    _block("**** GST No: 138-395-464 ****",                   73.3,  28),
+    _block("All items GST inclusive",                         74.5,  32),
+    _block("unless otherwise specified by (*)",               75.7,  25),
+    _block("******** BE IN TOWIN $500",                       78.2,  24),
+    _block("Tell us how we did today and go",                 79.3,  27),
+    _block("into the monthly draw to win a",                  80.5,  28),
+    _block("$500 PAK'nSave gift card",                        81.7,  32),
+    _block("Have your say al pakusave.co.nz/surveys",         82.9,  21),
+]
+
+PAKNSAVE_20260516_EXPECTED = [
+    "ASAVE",
+    "****  PAR  PALMERSTON NORTH",
+    "FERGUSON STREET",
+    "SOBRO LIMITED",
+    "PH: 06) 356-4043",
+    "Order online and collect-trom the store",
+    "Go to paknsave.co.nz/shop",
+    "KIA KAHA. STRESSED OR OVERWHELMED?",
+    "CALL OR TEXT 1737 FOR FREE KORERO",
+    "CINCERELLA ALMOND MEAL 400G  $12.39",
+    "FRE (AS BREAD MIXED GRAIN /50G  $4.37",
+    "YAS BREAD SOYA / LINSEED 7506  $4.37",
+    "BARRAWAYS ROLLED GATS ORG 8006  $8.19",
+    "PALMERSION NORTH COUNCIL RUBBISH BAG.5S  $19.00",
+    "PAMS DATES 400G  $2.69",
+    "PAMS DESIDCATED COCONUT 2506  $3.75",
+    "PAMS WASH VANILLA REFILL 1L",
+    "2@  $4.49  $8.98",
+    "PAMS PLANT BASED SOY MILK REGULAR IL",
+    "20  $2.49  $4.98",
+    "TUX ADULT ORIGINAL MEATY 8KG  $34.99",
+    "CABBAGE GREEN  $2.99",
+    "CLERY  $2.99",
+    "PAMS VALUE MILK STANDARD 4  $4.38",
+    "is BALANCE DUE  $114.57",
+    "EFTPOS  $114.57",
+    "SUBTOTAL  $99.63",
+    "TOTAL GST  $14.94",
+    "TOTAL  $114",
+    "CHANGE  $0.00",
+    "PAK N SAVE PALMERSTO",
+    "327 FERGUSON STREET",
+    "PALMERSTON NORTH",
+    "EFTPOS",
+    "TERM:NAL  04155063",
+    "TIME  16May26 15:42",
+    "TRAN 071792  CHEQUE",
+    "EFTPOS",
+    "CARD  8996",
+    "PURCHASE  NZD114.57",
+    "TOTAL  NZD114.57",
+    "ACCEPTED",
+    "CUSTOMER COPY",
+    "CASHIER NAME: SCO Cashier",
+    "16/05/2026 15:42:28 05082 0212",
+    "TAX  INVOICE",
+    "**** GST No: 138-395-464 ****",
+    "All items GST inclusive",
+    "unless otherwise specified by (*)",
+    "******** BE IN TOWIN $500",
+    "Tell us how we did today and go",
+    "into the monthly draw to win a",
+    "$500 PAK'nSave gift card",
+    "Have your say al pakusave.co.nz/surveys",
+]
+
+
+class TestGroupBlocksMay2026(unittest.TestCase):
+    def test_row_count(self):
+        rows, _, _ = group_blocks(PAKNSAVE_20260516)
+        self.assertEqual(len(rows), 54)
+
+    def test_all_blocks_assigned(self):
+        rows, _, _ = group_blocks(PAKNSAVE_20260516)
+        self.assertEqual(sum(len(r) for r in rows), len(PAKNSAVE_20260516))
+
+    def test_reading_order(self):
+        rows, _, _ = group_blocks(PAKNSAVE_20260516)
+        tops = [min(b["Geometry"]["BoundingBox"]["Top"] for b in row) for row in rows]
+        self.assertEqual(tops, sorted(tops))
+
+    def test_merged_lines(self):
+        rows, _, _ = group_blocks(PAKNSAVE_20260516)
+        self.assertEqual(_lines(rows), PAKNSAVE_20260516_EXPECTED)
+
+    def test_three_block_header_row(self):
+        """**** PAR PALMERSTON NORTH are three blocks at the same Y — must chain."""
+        rows, _, _ = group_blocks(PAKNSAVE_20260516)
+        self.assertIn("****  PAR  PALMERSTON NORTH", _lines(rows))
+
+    def test_large_y_offset_chains(self):
+        """Descriptions and prices up to 0.4% apart vertically must still chain."""
+        rows, _, _ = group_blocks(PAKNSAVE_20260516)
+        result = _lines(rows)
+        self.assertIn("PAMS DATES 400G  $2.69", result)
+
+    def test_multi_purchase_alone(self):
+        rows, _, _ = group_blocks(PAKNSAVE_20260516)
+        result = _lines(rows)
+        self.assertIn("PAMS WASH VANILLA REFILL 1L", result)
+        self.assertFalse(any("PAMS WASH" in l and "$" in l for l in result))
+
+
 if __name__ == "__main__":
     unittest.main()
