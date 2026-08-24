@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import boto3
 from botocore.config import Config
 from constants import VALID_ITEM_CATEGORIES
-from dynamo import update_job
+from dynamo import update_job, now_iso
 from line_items import write_line_items, LineItemContext
 from pricing import check_price_sum
 
@@ -498,5 +498,3 @@ def make_response(status_code: int, body: dict) -> dict:
     }
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

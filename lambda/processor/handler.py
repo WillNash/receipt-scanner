@@ -7,7 +7,7 @@ from urllib.parse import unquote_plus
 
 import boto3
 
-from dynamo import update_job, dyn_s, dyn_n, dyn_bool
+from dynamo import update_job, get_job, now_iso, dyn_s, dyn_n, dyn_bool
 from pricing import check_price_sum
 from constants import VALID_ITEM_CATEGORIES
 from line_items import write_line_items, LineItemContext
@@ -82,18 +82,14 @@ def process_record(record):
         parts = key.split("/")
         job_id = parts[2].rsplit(".", 1)[0] if len(parts) >= 3 else key
 
-        existing = dynamodb.get_item(
-            TableName=DYNAMODB_TABLE,
-            Key={"job_id": {"S": job_id}},
-        )
-        existing_item = existing.get("Item", {})
-        if existing_item.get("status", {}).get("S") == "COMPLETE":
+        existing = get_job(dynamodb, DYNAMODB_TABLE, job_id)
+        if existing and existing["status"] == "COMPLETE":
             print(f"Job {job_id} already COMPLETE — skipping")
             continue
 
-        user_id = existing_item.get("user_id", {}).get("S", "unknown")
-        user_email = existing_item.get("email", {}).get("S", "")
-        created_at = existing_item.get("created_at", {}).get("S", now_iso())
+        user_id = (existing or {}).get("user_id") or "unknown"
+        user_email = (existing or {}).get("email") or ""
+        created_at = (existing or {}).get("created_at") or now_iso()
 
         update_job(dynamodb, DYNAMODB_TABLE, job_id, {
             "status": dyn_s("PROCESSING"),
@@ -105,11 +101,8 @@ def process_record(record):
 
         prior_job_id = lookup_image_hash(user_id, image_hash)
         if prior_job_id:
-            prior_resp = dynamodb.get_item(
-                TableName=DYNAMODB_TABLE,
-                Key={"job_id": {"S": prior_job_id}},
-            )
-            prior_status = prior_resp.get("Item", {}).get("status", {}).get("S")
+            prior = get_job(dynamodb, DYNAMODB_TABLE, prior_job_id)
+            prior_status = prior["status"] if prior else None
             if prior_status == "COMPLETE":
                 print(f"DUPLICATE image_hash={image_hash[:12]}… prior_job={prior_job_id}")
                 s3.delete_object(Bucket=bucket, Key=key)
@@ -288,5 +281,3 @@ def store_image_hash(user_id: str, image_hash: str, job_id: str, expires_at: int
     )
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

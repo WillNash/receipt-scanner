@@ -127,7 +127,6 @@ def crop_receipt(s3, bucket: str, key: str, image_data: bytes | None = None) -> 
 
         method, sx0, sy0, sx1, sy1 = result
 
-        # Pad in small-image space then scale back
         px, py = int(sw * PAD_FRAC), int(sh * PAD_FRAC)
         left  = max(0, int(max(0, sx0 - px) / scale))
         upper = max(0, int(max(0, sy0 - py) / scale))
@@ -164,9 +163,16 @@ def crop_receipt(s3, bucket: str, key: str, image_data: bytes | None = None) -> 
         return None
 
 
+_CROP_STRATEGIES = [
+    ("bright",   _bright_region),
+    ("contour",  _edge_contour),
+    ("mser",     _mser_density),
+]
+
+
 def _find_receipt(small, sw, sh):
     """Try detection methods in priority order. Returns (method, x0, y0, x1, y1) or None."""
-    for method, fn in (("bright", _bright_region), ("contour", _edge_contour), ("mser", _mser_density)):
+    for method, fn in _CROP_STRATEGIES:
         r = fn(small, sw, sh)
         if r:
             print(f"CROP_METHOD: {method}")
@@ -177,11 +183,11 @@ def _find_receipt(small, sw, sh):
 def _bright_region(small, sw, sh):
     """Find a large bright (white/cream) area — works for receipts on coloured backgrounds."""
     lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
-    l = lab[:, :, 0]
+    lightness = lab[:, :, 0]
     k = max(3, sw // 80)
     kernel = np.ones((k, k), np.uint8)
     for thresh in (195, 180, 165):
-        _, mask = cv2.threshold(l, thresh, 255, cv2.THRESH_BINARY)
+        _, mask = cv2.threshold(lightness, thresh, 255, cv2.THRESH_BINARY)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel * 4)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  kernel)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
