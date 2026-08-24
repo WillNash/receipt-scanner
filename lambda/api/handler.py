@@ -40,6 +40,12 @@ VALID_CONTENT_TYPES = {
     "image/png": "png",
 }
 
+VALID_ITEM_CATEGORIES = {
+    "fruit_veg", "dairy", "meat_seafood", "bakery", "deli", "frozen",
+    "pantry", "snacks", "confectionery", "beverages", "alcohol",
+    "household", "personal_care", "pet", "tobacco", "non_food", "other",
+}
+
 # Module-level JWKS cache — populated once per Lambda container (cold start only).
 # Warm invocations reuse _jwks_cache and skip the Cognito network fetch.
 _jwks_cache = None
@@ -352,7 +358,11 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
 
         if LINE_ITEMS_TABLE:
             created_at = item.get("created_at", {}).get("S", "")
-            _replace_line_items(job_id, user_id, item, created_at, new_items)
+            try:
+                _replace_line_items(job_id, user_id, item, created_at, new_items)
+            except Exception as exc:
+                print(f"ERROR _replace_line_items job={job_id}: {exc}")
+                return make_response(500, {"error": "Failed to update line items"})
 
     update_job(dynamodb, DYNAMODB_TABLE, job_id, updates)
 
@@ -420,17 +430,18 @@ def _replace_line_items(job_id: str, user_id: str, job_record: dict, created_at:
             n = to_n(new_item.get(field))
             if n:
                 record[field] = n
+        pkg_size = str(new_item.get("package_size") or "").strip()
+        if pkg_size:
+            record["package_size"] = {"S": pkg_size}
         # Preserve classification fields if present (carried through from original item)
-        item_category = new_item.get("item_category")
-        if isinstance(item_category, str) and item_category:
-            record["item_category"] = {"S": item_category}
+        item_category = new_item.get("item_category", "other")
+        if item_category not in VALID_ITEM_CATEGORIES:
+            item_category = "other"
+        record["item_category"] = {"S": item_category}
         nova = new_item.get("nova_group")
         if isinstance(nova, int) and nova in (1, 2, 3, 4):
             record["nova_group"] = {"N": str(nova)}
-        try:
-            dynamodb.put_item(TableName=LINE_ITEMS_TABLE, Item=record)
-        except Exception as e:
-            print(f"WARN: line_item insert failed {item_sk}: {e}")
+        dynamodb.put_item(TableName=LINE_ITEMS_TABLE, Item=record)
 
 
 
