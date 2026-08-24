@@ -15,7 +15,7 @@ PROC_DIR="$LAMBDA_DIR/processor"
 PKG_DIR="$PROC_DIR/package"
 rm -rf "$PKG_DIR"
 mkdir -p "$PKG_DIR"
-cp "$PROC_DIR/handler.py" "$PROC_DIR/line_grouping.py" "$LAMBDA_DIR/shared/pricing.py" "$PKG_DIR/"
+cp "$PROC_DIR/handler.py" "$PROC_DIR/line_grouping.py" "$LAMBDA_DIR/shared/pricing.py" "$LAMBDA_DIR/shared/dynamo.py" "$PKG_DIR/"
 # --platform and --only-binary guarantee Lambda-compatible manylinux binary wheels.
 # Without this, pip may fall back to a source dist that won't work in the Lambda runtime.
 "$VENV/bin/pip" install -r "$PROC_DIR/requirements.txt" \
@@ -31,7 +31,7 @@ API_DIR="$LAMBDA_DIR/api"
 PKG_DIR="$API_DIR/package"
 rm -rf "$PKG_DIR"
 mkdir -p "$PKG_DIR"
-cp "$API_DIR/handler.py" "$LAMBDA_DIR/shared/pricing.py" "$PKG_DIR/"
+cp "$API_DIR/handler.py" "$LAMBDA_DIR/shared/pricing.py" "$LAMBDA_DIR/shared/dynamo.py" "$PKG_DIR/"
 "$VENV/bin/pip" install -r "$API_DIR/requirements.txt" \
   --target "$PKG_DIR" \
   --platform manylinux2014_x86_64 \

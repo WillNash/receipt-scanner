@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from line_grouping import group_blocks
+from dynamo import update_job
 from pricing import check_price_sum, to_float, to_n
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
@@ -195,7 +196,7 @@ def process_record(record):
         user_email = existing_item.get("email", {}).get("S", "")
         created_at = existing_item.get("created_at", {}).get("S", now_iso())
 
-        update_job(job_id, {
+        update_job(dynamodb, DYNAMODB_TABLE, job_id, {
             "status": {"S": "PROCESSING"},
             "updated_at": {"S": now_iso()},
         })
@@ -213,7 +214,7 @@ def process_record(record):
             if prior_status == "COMPLETE":
                 print(f"DUPLICATE image_hash={image_hash[:12]}… prior_job={prior_job_id}")
                 s3.delete_object(Bucket=bucket, Key=key)
-                update_job(job_id, {
+                update_job(dynamodb, DYNAMODB_TABLE, job_id, {
                     "status": {"S": "DUPLICATE"},
                     "image_hash": {"S": image_hash},
                     "updated_at": {"S": now_iso()},
@@ -223,7 +224,7 @@ def process_record(record):
         result = analyze_receipt(bucket, key, job_id, user_id, image_data=image_data)
 
         expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
-        update_job(job_id, {
+        update_job(dynamodb, DYNAMODB_TABLE, job_id, {
             "status": {"S": "COMPLETE"},
             "store_category": {"S": result["store_category"]},
             "price_check_warning": {"BOOL": result["price_check_warning"]},
@@ -801,22 +802,6 @@ def write_line_items(
 
         dynamodb.put_item(TableName=LINE_ITEMS_TABLE, Item=record)
         print(f"LINE_ITEM_WRITTEN {job_id}#{i:03d} {description!r} [{item_category}]")
-
-
-def update_job(job_id: str, fields: dict) -> None:
-    parts, values, names = [], {}, {}
-    for key, val in fields.items():
-        parts.append(f"#{key} = :{key}")
-        values[f":{key}"] = val
-        names[f"#{key}"] = key
-
-    dynamodb.update_item(
-        TableName=DYNAMODB_TABLE,
-        Key={"job_id": {"S": job_id}},
-        UpdateExpression="SET " + ", ".join(parts),
-        ExpressionAttributeNames=names,
-        ExpressionAttributeValues=values,
-    )
 
 
 def now_iso() -> str:

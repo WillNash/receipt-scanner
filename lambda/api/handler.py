@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 from botocore.config import Config
+from dynamo import update_job
 from pricing import check_price_sum, to_n
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
@@ -353,7 +354,7 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
             created_at = item.get("created_at", {}).get("S", "")
             _replace_line_items(job_id, user_id, item, created_at, new_items)
 
-    update_job(job_id, updates)
+    update_job(dynamodb, DYNAMODB_TABLE, job_id, updates)
 
     refreshed = dynamodb.get_item(
         TableName=DYNAMODB_TABLE,
@@ -431,24 +432,6 @@ def _replace_line_items(job_id: str, user_id: str, job_record: dict, created_at:
         except Exception as e:
             print(f"WARN: line_item insert failed {item_sk}: {e}")
 
-
-def update_job(job_id: str, updates: dict) -> None:
-    set_parts = []
-    attr_names = {}
-    attr_values = {}
-    for i, (key, val) in enumerate(updates.items()):
-        name_alias = f"#k{i}"
-        val_alias = f":v{i}"
-        set_parts.append(f"{name_alias} = {val_alias}")
-        attr_names[name_alias] = key
-        attr_values[val_alias] = val
-    dynamodb.update_item(
-        TableName=DYNAMODB_TABLE,
-        Key={"job_id": {"S": job_id}},
-        UpdateExpression="SET " + ", ".join(set_parts),
-        ExpressionAttributeNames=attr_names,
-        ExpressionAttributeValues=attr_values,
-    )
 
 
 def format_receipt(item: dict) -> dict:
