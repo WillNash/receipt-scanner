@@ -399,7 +399,7 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
     deskew_applied = correction is not None
     if deskew_applied:
         print(f"DESKEW angle={skew:.2f}° correction={correction:.1f}° — rotating and re-running Textract")
-        data = _deskew_image(data, -correction)
+        data = _deskew_image(data, correction)
         receipt_text, receipt_lines, textract_blocks, textract_rows, line_height, step_tol = _textract_lines(data)
     else:
         print(f"DESKEW skew={skew:.2f}° — no correction" if skew is not None else "DESKEW insufficient lines")
