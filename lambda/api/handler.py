@@ -12,6 +12,7 @@ LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
 IMAGE_HASHES_TABLE = os.environ.get("IMAGE_HASHES_TABLE", "")
 UPLOADS_BUCKET = os.environ["UPLOADS_BUCKET"]
 COGNITO_POOL_ID = os.environ["COGNITO_USER_POOL_ID"]
+COGNITO_APP_CLIENT_ID = os.environ["COGNITO_APP_CLIENT_ID"]
 PRIMARY_REGION = os.environ.get("PRIMARY_REGION", "ap-southeast-2")
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 DAILY_UPLOAD_LIMIT = int(os.environ.get("DAILY_UPLOAD_LIMIT", "50"))
@@ -85,11 +86,16 @@ def lambda_handler(event, context):
 
 
 def check_and_increment_global_count() -> bool:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    expiry = int((datetime.now(timezone.utc) + timedelta(days=2)).timestamp())
     resp = dynamodb.update_item(
         TableName=DYNAMODB_TABLE,
-        Key={"job_id": {"S": "COUNT#GLOBAL"}},
-        UpdateExpression="ADD upload_count :one",
-        ExpressionAttributeValues={":one": {"N": "1"}},
+        Key={"job_id": {"S": f"COUNT#GLOBAL#{today}"}},
+        UpdateExpression="ADD upload_count :one SET expires_at = if_not_exists(expires_at, :exp)",
+        ExpressionAttributeValues={
+            ":one": {"N": "1"},
+            ":exp": {"N": str(expiry)},
+        },
         ReturnValues="UPDATED_NEW",
     )
     count = int(resp["Attributes"]["upload_count"]["N"])
@@ -130,11 +136,17 @@ def handle_upload_url(event, user_id: str, user_email: str):
             prior_job_id = resp["Item"].get("job_id", {}).get("S", "")
             return make_response(409, {"error": "duplicate", "jobId": prior_job_id})
 
-    if not check_and_increment_global_count():
-        return make_response(429, {"error": "Global upload limit reached."})
-
     if not check_and_increment_daily_count(user_id):
-        return make_response(429, {"error": "Daily upload limit reached. Try again tomorrow."})
+        return make_response(429, {
+            "error": f"You've reached your daily limit of {DAILY_UPLOAD_LIMIT} uploads. Try again tomorrow.",
+            "limitType": "user",
+        })
+
+    if not check_and_increment_global_count():
+        return make_response(429, {
+            "error": "Today's global upload limit has been reached. Try again tomorrow.",
+            "limitType": "global",
+        })
 
     ext = VALID_CONTENT_TYPES[content_type]
     job_id = str(uuid.uuid4())
@@ -264,9 +276,49 @@ def handle_delete_receipt(job_id: str | None, user_id: str):
     return make_response(200, {"deleted": True})
 
 
+def _validate_edit_body(body: dict) -> str | None:
+    """Return an error string if the PATCH body fails validation, else None."""
+    if "vendor" in body:
+        v = body["vendor"]
+        if not isinstance(v, str) or len(v) > 200:
+            return "vendor must be a string of at most 200 characters"
+    if "receiptDate" in body:
+        d = body["receiptDate"]
+        if not isinstance(d, str) or len(d) > 20:
+            return "receiptDate must be a string of at most 20 characters"
+        import re
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+            return "receiptDate must be in YYYY-MM-DD format"
+    if "items" in body:
+        items = body["items"]
+        if not isinstance(items, list) or len(items) > 200:
+            return "items must be a list of at most 200 entries"
+        for item in items:
+            if not isinstance(item, dict):
+                return "each item must be an object"
+            if "description" in item:
+                desc = item["description"]
+                if not isinstance(desc, str) or len(desc) > 500:
+                    return "item description must be a string of at most 500 characters"
+            if "quantity" in item:
+                qty = item["quantity"]
+                if not isinstance(qty, str) or len(qty) > 50:
+                    return "item quantity must be a string of at most 50 characters"
+            for field in ("unit_price", "price", "discount"):
+                if field in item:
+                    val = item[field]
+                    if not isinstance(val, str) or len(val) > 30:
+                        return f"item {field} must be a string of at most 30 characters"
+    return None
+
+
 def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
     if not job_id:
         return make_response(400, {"error": "jobId required"})
+
+    err = _validate_edit_body(body)
+    if err:
+        return make_response(400, {"error": err})
 
     result = dynamodb.get_item(
         TableName=DYNAMODB_TABLE,
@@ -286,40 +338,19 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
     if "receiptDate" in body:
         updates["receipt_date"] = {"S": str(body["receiptDate"])}
 
-    new_item_patches = body.get("items")  # list of {"description": "..."}
-    if new_item_patches is not None:
-        existing_raw = item.get("items", {}).get("S", "[]")
-        try:
-            existing_items = json.loads(existing_raw)
-        except (json.JSONDecodeError, TypeError):
-            existing_items = []
+    new_items = body.get("items")  # full replacement list
+    if new_items is not None:
+        updates["items"] = {"S": json.dumps(new_items)}
 
-        for i, patch in enumerate(new_item_patches):
-            if i < len(existing_items) and "description" in patch:
-                existing_items[i]["description"] = patch["description"]
-
-        updates["items"] = {"S": json.dumps(existing_items)}
+        # Recalculate price check so the warning clears once items are corrected
+        total_str = item.get("total", {}).get("S", "")
+        pc = _recheck_prices(new_items, total_str)
+        updates["price_check_warning"] = {"BOOL": pc["warning"]}
+        updates["price_check_message"] = {"S": pc["message"]}
 
         if LINE_ITEMS_TABLE:
             created_at = item.get("created_at", {}).get("S", "")
-            for i, patch in enumerate(new_item_patches):
-                if "description" not in patch:
-                    continue
-                item_sk = f"{created_at}#{job_id}#{i:03d}"
-                new_desc = patch["description"]
-                try:
-                    dynamodb.update_item(
-                        TableName=LINE_ITEMS_TABLE,
-                        Key={"user_id": {"S": user_id}, "item_sk": {"S": item_sk}},
-                        UpdateExpression="SET #d = :d, #dc = :dc",
-                        ExpressionAttributeNames={"#d": "description", "#dc": "desc_created"},
-                        ExpressionAttributeValues={
-                            ":d":  {"S": new_desc},
-                            ":dc": {"S": f"{new_desc}#{created_at}"},
-                        },
-                    )
-                except Exception as e:
-                    print(f"WARN: line_item update failed {item_sk}: {e}")
+            _replace_line_items(job_id, user_id, item, created_at, new_items)
 
     update_job(job_id, updates)
 
@@ -328,6 +359,102 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
         Key={"job_id": {"S": job_id}},
     )
     return make_response(200, format_receipt(refreshed["Item"]))
+
+
+def _recheck_prices(items: list, total_str: str) -> dict:
+    def to_float(val):
+        try:
+            cleaned = str(val).replace(",", "").replace("$", "").strip()
+            return float(cleaned) if cleaned else None
+        except (ValueError, TypeError):
+            return None
+
+    total = to_float(total_str)
+    if total is None:
+        return {"warning": False, "message": ""}
+
+    items_sum = round(sum(p for p in (to_float(it.get("price")) for it in items) if p is not None), 2)
+    diff = abs(items_sum - total)
+    if diff >= 0.01:
+        direction = "over" if items_sum > total else "under"
+        return {
+            "warning": True,
+            "message": f"item prices sum to {items_sum:.2f} but receipt total is {total:.2f} ({direction} by {diff:.2f})",
+        }
+    return {"warning": False, "message": f"ok (difference {diff:.2f})"}
+
+
+def _replace_line_items(job_id: str, user_id: str, job_record: dict, created_at: str, new_items: list) -> None:
+    """Delete all existing line_items for this job then insert the new list."""
+    def to_n(val):
+        try:
+            cleaned = str(val).replace(",", "").replace("$", "").strip()
+            return {"N": str(float(cleaned))} if cleaned else None
+        except (ValueError, TypeError):
+            return None
+
+    # Delete existing rows
+    if created_at:
+        prefix = f"{created_at}#{job_id}#"
+        resp = dynamodb.query(
+            TableName=LINE_ITEMS_TABLE,
+            KeyConditionExpression="#uid = :uid AND begins_with(#sk, :prefix)",
+            ExpressionAttributeNames={"#uid": "user_id", "#sk": "item_sk"},
+            ExpressionAttributeValues={
+                ":uid": {"S": user_id},
+                ":prefix": {"S": prefix},
+            },
+            ProjectionExpression="#uid, #sk",
+        )
+        keys = [{"user_id": it["user_id"], "item_sk": it["item_sk"]} for it in resp.get("Items", [])]
+        for i in range(0, len(keys), 25):
+            dynamodb.batch_write_item(
+                RequestItems={
+                    LINE_ITEMS_TABLE: [{"DeleteRequest": {"Key": k}} for k in keys[i:i + 25]]
+                }
+            )
+
+    # Read context fields from the job record
+    vendor       = job_record.get("vendor",         {}).get("S", "")
+    receipt_date = job_record.get("receipt_date",   {}).get("S", "")
+    store_cat    = job_record.get("store_category", {}).get("S", "other")
+    user_email   = job_record.get("email",          {}).get("S", "")
+    expires_at   = job_record.get("expires_at",     {}).get("N", "0")
+
+    for i, new_item in enumerate(new_items):
+        description = str(new_item.get("description") or "").strip()
+        if not description:
+            continue
+        item_sk     = f"{created_at}#{job_id}#{i:03d}"
+        desc_created = f"{description}#{created_at}"
+        record = {
+            "user_id":        {"S": user_id},
+            "item_sk":        {"S": item_sk},
+            "job_id":         {"S": job_id},
+            "description":    {"S": description},
+            "desc_created":   {"S": desc_created},
+            "email":          {"S": user_email},
+            "vendor":         {"S": vendor},
+            "receipt_date":   {"S": receipt_date},
+            "store_category": {"S": store_cat},
+            "created_at":     {"S": created_at},
+            "expires_at":     {"N": str(expires_at)},
+        }
+        for field in ("quantity", "unit_price", "price", "discount"):
+            n = to_n(new_item.get(field))
+            if n:
+                record[field] = n
+        # Preserve classification fields if present (carried through from original item)
+        item_category = new_item.get("item_category")
+        if isinstance(item_category, str) and item_category:
+            record["item_category"] = {"S": item_category}
+        nova = new_item.get("nova_group")
+        if isinstance(nova, int) and nova in (1, 2, 3, 4):
+            record["nova_group"] = {"N": str(nova)}
+        try:
+            dynamodb.put_item(TableName=LINE_ITEMS_TABLE, Item=record)
+        except Exception as e:
+            print(f"WARN: line_item insert failed {item_sk}: {e}")
 
 
 def update_job(job_id: str, updates: dict) -> None:
@@ -381,13 +508,19 @@ def format_receipt(item: dict) -> dict:
     if cropped_key:
         cropped_image_url = presign(cropped_key, f"cropped_{job_id}.jpg")
 
+    price_check_warning = item.get("price_check_warning", {}).get("BOOL", False)
+    price_check_message = item.get("price_check_message", {}).get("S")
+
     return {
         "jobId": job_id,
         "status": item.get("status", {}).get("S", "UNKNOWN"),
+        "storeCategory": item.get("store_category", {}).get("S"),
         "vendor": item.get("vendor", {}).get("S"),
         "receiptDate": item.get("receipt_date", {}).get("S"),
         "total": item.get("total", {}).get("S"),
         "items": line_items,
+        "priceCheckWarning": price_check_warning,
+        "priceCheckMessage": price_check_message,
         "debugUrl": debug_url,
         "textractDebugUrl": textract_debug_url,
         "croppedImageUrl": cropped_image_url,
@@ -412,8 +545,12 @@ def get_user_id(event) -> tuple[str, str]:
         token,
         jwks,
         algorithms=["RS256"],
-        options={"verify_aud": False, "verify_at_hash": False},
+        audience=COGNITO_APP_CLIENT_ID,
+        issuer=f"https://cognito-idp.{PRIMARY_REGION}.amazonaws.com/{COGNITO_POOL_ID}",
+        options={"verify_at_hash": False},
     )
+    if claims.get("token_use") != "id":
+        raise ValueError("Wrong token_use")
     return claims["sub"], claims.get("email", "")
 
 

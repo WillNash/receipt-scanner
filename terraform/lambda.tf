@@ -80,8 +80,9 @@ resource "aws_lambda_function" "api_handler" {
       LINE_ITEMS_TABLE     = aws_dynamodb_table.line_items.name
       IMAGE_HASHES_TABLE   = aws_dynamodb_table.image_hashes.name
       UPLOADS_BUCKET       = aws_s3_bucket.uploads.bucket
-      COGNITO_USER_POOL_ID = aws_cognito_user_pool.main.id
-      PRIMARY_REGION       = var.primary_region
+      COGNITO_USER_POOL_ID  = aws_cognito_user_pool.main.id
+      COGNITO_APP_CLIENT_ID = aws_cognito_user_pool_client.main.id
+      PRIMARY_REGION        = var.primary_region
       ALLOWED_ORIGIN       = "https://${aws_cloudfront_distribution.frontend.domain_name}"
       DAILY_UPLOAD_LIMIT   = var.daily_upload_limit
       GLOBAL_UPLOAD_LIMIT  = var.global_upload_limit

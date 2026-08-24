@@ -249,9 +249,10 @@ class _SavedCapturesPickerState extends State<_SavedCapturesPicker> {
   @override
   Widget build(BuildContext context) {
     final files = _files;
+    final hasFiles = files != null && files.isNotEmpty;
 
     return Column(
-      mainAxisSize: MainAxisSize.min,
+      mainAxisSize: hasFiles ? MainAxisSize.max : MainAxisSize.min,
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -262,7 +263,7 @@ class _SavedCapturesPickerState extends State<_SavedCapturesPicker> {
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               const Spacer(),
-              if (files != null && files.isNotEmpty)
+              if (hasFiles)
                 FilledButton(
                   onPressed: _selected.isEmpty
                       ? null
@@ -291,9 +292,8 @@ class _SavedCapturesPickerState extends State<_SavedCapturesPicker> {
             child: Text('No saved captures yet. Tap "Camera" to take a photo.'),
           )
         else
-          Flexible(
+          Expanded(
             child: GridView.builder(
-              shrinkWrap: true,
               padding: const EdgeInsets.all(8),
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 3,
@@ -316,7 +316,7 @@ class _SavedCapturesPickerState extends State<_SavedCapturesPicker> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      Image.file(file, fit: BoxFit.cover),
+                      Image.file(file, fit: BoxFit.cover, cacheWidth: 300),
                       if (isSelected)
                         Container(
                           color: Colors.black38,

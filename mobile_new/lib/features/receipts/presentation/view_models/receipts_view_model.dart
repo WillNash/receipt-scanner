@@ -74,7 +74,7 @@ class ReceiptsNotifier extends AsyncNotifier<List<ReceiptJob>> {
     String jobId, {
     String? vendor,
     String? receiptDate,
-    List<Map<String, String>>? items,
+    List<Map<String, dynamic>>? items,
   }) async {
     final updated = await ref.read(_receiptsServiceProvider).editReceipt(
           jobId,

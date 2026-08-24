@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 import os
 from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote_plus
@@ -7,6 +8,8 @@ from urllib.parse import unquote_plus
 import boto3
 import cv2
 import numpy as np
+
+from line_grouping import group_blocks
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
 LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
@@ -22,15 +25,36 @@ dynamodb = boto3.client("dynamodb", region_name=PRIMARY_REGION)
 bedrock = boto3.client("bedrock-runtime", region_name=PRIMARY_REGION)
 textract = boto3.client("textract", region_name=PRIMARY_REGION)
 
+VALID_STORE_CATEGORIES = {
+    "grocery", "petrol", "pharmacy", "restaurant", "fast_food", "cafe",
+    "hardware", "department_store", "clothing", "electronics",
+    "health_beauty", "liquor", "other",
+}
+
+VALID_ITEM_CATEGORIES = {
+    "fruit_veg", "dairy", "meat_seafood", "bakery", "deli", "frozen",
+    "pantry", "snacks", "confectionery", "beverages", "alcohol",
+    "household", "personal_care", "pet", "tobacco", "non_food", "other",
+}
+
 # Tool definition — forces structured JSON output from the model
 RECEIPT_TOOL = {
     "toolSpec": {
         "name": "extract_receipt",
-        "description": "Extract structured data from a receipt image.",
+        "description": "Extract and classify structured data from a receipt.",
         "inputSchema": {
             "json": {
                 "type": "object",
                 "properties": {
+                    "store_category": {
+                        "type": "string",
+                        "description": (
+                            "Type of store. Pick exactly one: "
+                            "grocery | petrol | pharmacy | restaurant | fast_food | cafe | "
+                            "hardware | department_store | clothing | electronics | "
+                            "health_beauty | liquor | other"
+                        ),
+                    },
                     "vendor": {
                         "type": "string",
                         "description": "Store or vendor name",
@@ -62,9 +86,19 @@ RECEIPT_TOOL = {
                                 "quantity": {
                                     "type": "string",
                                     "description": (
-                                        "Number of units purchased. "
-                                        "If the receipt shows '2 @ $1.79', quantity is '2'. "
-                                        "For weight-based items e.g. '1.5 Kg @ $2.99/Kg', quantity is '1.5 Kg'."
+                                        "Pure numeric count or measured weight — no units. "
+                                        "quantity × unit_price must equal price. "
+                                        "Examples: '2' for two units, '1.741' for 1.741 kg of a weight-priced item. "
+                                        "For a fixed-price item like 'PAMS CHEESE BLOCK 1KG' bought once: quantity is '1'."
+                                    ),
+                                },
+                                "package_size": {
+                                    "type": "string",
+                                    "description": (
+                                        "Size or weight label from the product name for fixed-price items "
+                                        "(e.g. '1KG', '500G', '2L', '750ML', '400G'). "
+                                        "Set only when the weight/volume is part of the product's brand name, "
+                                        "not for weight-priced items sold by the kg/g where quantity carries the weight."
                                     ),
                                 },
                                 "unit_price": {
@@ -90,12 +124,33 @@ RECEIPT_TOOL = {
                                         "price should equal (quantity * unit_price) + discount."
                                     ),
                                 },
+                                "item_category": {
+                                    "type": "string",
+                                    "description": (
+                                        "Product category. Pick exactly one: "
+                                        "fruit_veg | dairy | meat_seafood | bakery | deli | frozen | "
+                                        "pantry | snacks | confectionery | beverages | alcohol | "
+                                        "household | personal_care | pet | tobacco | non_food | other. "
+                                        "Use 'other' for generic descriptions like 'Value Pack' or bare SKU codes."
+                                    ),
+                                },
+                                "nova_group": {
+                                    "type": "integer",
+                                    "description": (
+                                        "NOVA food processing group: "
+                                        "1=unprocessed/minimally processed (fresh apple, plain chicken, brown rice), "
+                                        "2=culinary ingredient (olive oil, butter, sugar, plain flour), "
+                                        "3=processed food (canned tuna, block cheese, sourdough loaf, canned tomatoes), "
+                                        "4=ultra-processed (chips, instant noodles, diet cola, flavoured yoghurt, breakfast bars). "
+                                        "Use null for non-food items."
+                                    ),
+                                },
                             },
                             "required": ["description"],
                         },
                     },
                 },
-                "required": ["vendor", "receipt_date", "total", "items"],
+                "required": ["store_category", "vendor", "receipt_date", "total", "items"],
             }
         },
     }
@@ -164,11 +219,14 @@ def process_record(record):
                 })
                 continue
 
-        result = analyze_receipt(bucket, key, job_id, image_data=image_data)
+        result = analyze_receipt(bucket, key, job_id, user_id, image_data=image_data)
 
         expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
         update_job(job_id, {
             "status": {"S": "COMPLETE"},
+            "store_category": {"S": result["store_category"]},
+            "price_check_warning": {"BOOL": result["price_check_warning"]},
+            "price_check_message": {"S": result["price_check_message"]},
             "vendor": {"S": result["vendor"]},
             "receipt_date": {"S": result["receipt_date"]},
             "total": {"S": result["total"]},
@@ -191,6 +249,7 @@ def process_record(record):
                 created_at=created_at,
                 vendor=result["vendor"],
                 receipt_date=result["receipt_date"],
+                store_category=result["store_category"],
                 items=result["items"],
                 expires_at=expiry,
             )
@@ -210,34 +269,120 @@ def _to_jpeg(data: bytes) -> bytes:
     return buf.tobytes()
 
 
-def _textract_lines(image_bytes: bytes) -> tuple[str, list[str]]:
-    """Run Textract DetectDocumentText and return (full_text, lines) in reading order.
+def _textract_lines(image_bytes: bytes) -> tuple[str, list[str], list, list, float, float]:
+    """Run Textract DetectDocumentText and return (full_text, lines, line_blocks, rows).
 
-    Groups blocks into rows by proximity then sorts left-to-right within each
-    row, producing a layout-aware text representation of the receipt.
+    Two-phase algorithm:
+    1. Calibrate: derive the receipt's line height from the distribution of
+       consecutive Y-gaps, avoiding any hardcoded page-fraction threshold.
+    2. Chain: pop the leftmost unassigned block, then walk right — each step
+       uses a rolling Y-tolerance anchored to the current block, so the window
+       follows any curvature rather than drifting from the row's origin.
     """
     resp = textract.detect_document_text(Document={"Bytes": image_bytes})
     blocks = [b for b in resp["Blocks"] if b["BlockType"] == "LINE"]
-    blocks.sort(key=lambda b: b["Geometry"]["BoundingBox"]["Top"])
 
-    ROW_GAP = 0.012  # fraction of page height — blocks closer than this are the same row
-    rows: list[list] = []
-    current: list = []
-    for block in blocks:
-        if not current or block["Geometry"]["BoundingBox"]["Top"] - current[0]["Geometry"]["BoundingBox"]["Top"] < ROW_GAP:
-            current.append(block)
-        else:
-            rows.append(sorted(current, key=lambda b: b["Geometry"]["BoundingBox"]["Left"]))
-            current = [block]
-    if current:
-        rows.append(sorted(current, key=lambda b: b["Geometry"]["BoundingBox"]["Left"]))
+    if not blocks:
+        return "", [], [], [], 0.0, 0.0
 
+    rows, line_height, step_tol = group_blocks(blocks)
     lines = ["  ".join(b["Text"] for b in row) for row in rows]
-    print(f"TEXTRACT lines={len(lines)}")
-    return "\n".join(lines), lines
+    print(f"TEXTRACT lines={len(lines)} line_height={line_height:.4f} step_tol={step_tol:.4f}")
+    return "\n".join(lines), lines, blocks, rows, line_height, step_tol
 
 
-def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None = None) -> dict:
+def _debug_block_list(blocks: list, rows: list) -> list:
+    """Slim Textract LINE blocks down to JSON-serialisable dicts, annotated with row index.
+
+    Blocks are in reading order (sorted by Top). The row index shows which blocks
+    were merged together by our ROW_GAP grouping: same row index = same merged line.
+    """
+    id_to_row = {}
+    for row_idx, row_blocks in enumerate(rows):
+        for block in row_blocks:
+            id_to_row[block["Id"]] = row_idx
+
+    result = []
+    for block in blocks:
+        bb = block["Geometry"]["BoundingBox"]
+        result.append({
+            "text":       block.get("Text", ""),
+            "confidence": round(block.get("Confidence", 0), 1),
+            "top":        round(bb["Top"],    4),
+            "left":       round(bb["Left"],   4),
+            "width":      round(bb["Width"],  4),
+            "height":     round(bb["Height"], 4),
+            "row":        id_to_row.get(block["Id"], -1),
+        })
+    return result
+
+
+def _compute_skew_angle(blocks: list) -> float | None:
+    """Compute median skew angle in degrees from Textract LINE polygon top edges.
+
+    Positive means text is tilted counter-clockwise; negative means clockwise.
+    Returns None when there are fewer than 3 lines to average over.
+    """
+    angles = []
+    for block in blocks:
+        pts = block.get("Geometry", {}).get("Polygon", [])
+        if len(pts) < 2:
+            continue
+        dx = pts[1]["X"] - pts[0]["X"]
+        dy = pts[1]["Y"] - pts[0]["Y"]
+        if abs(dx) < 1e-6:
+            continue
+        angles.append(math.degrees(math.atan2(dy, dx)))
+    if len(angles) < 3:
+        return None
+    return float(np.median(angles))
+
+
+def _deskew_correction(skew: float | None, threshold: float) -> float | None:
+    """Return the correction angle to pass to _deskew_image, or None if no correction needed.
+
+    Handles three valid cases:
+      • Small skew  (threshold < |skew| ≤ 30°): correct with the exact measured angle.
+      • Near ±90°   (|skew| within 10° of 90°): snap to exactly ±90° (portrait/landscape swap).
+      • Near ±180°  (|skew| within 10° of 180°): snap to exactly ±180° (upside-down image).
+
+    Angles in the 30–80° and 100–170° bands are ambiguous (likely detection noise) and skipped.
+    """
+    if skew is None:
+        return None
+    abs_skew = abs(skew)
+    if abs_skew < threshold:
+        return None
+    if abs_skew <= 30.0:
+        return skew
+    nearest_90 = round(skew / 90) * 90
+    if nearest_90 != 0 and abs(skew - nearest_90) <= 10.0:
+        return float(nearest_90)
+    return None
+
+
+def _deskew_image(image_bytes: bytes, angle_deg: float) -> bytes:
+    """Rotate image by angle_deg degrees counter-clockwise. Expands canvas to avoid clipping.
+    Falls back to original bytes if decoding fails."""
+    arr = np.frombuffer(image_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        return image_bytes
+    h, w = img.shape[:2]
+    cx, cy = w / 2.0, h / 2.0
+    M = cv2.getRotationMatrix2D((cx, cy), angle_deg, 1.0)
+    cos_a = abs(M[0, 0])
+    sin_a = abs(M[0, 1])
+    new_w = int(h * sin_a + w * cos_a)
+    new_h = int(h * cos_a + w * sin_a)
+    M[0, 2] += (new_w - w) / 2.0
+    M[1, 2] += (new_h - h) / 2.0
+    rotated = cv2.warpAffine(img, M, (new_w, new_h), borderValue=(255, 255, 255))
+    ok, buf = cv2.imencode(".jpg", rotated, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    return buf.tobytes() if ok else image_bytes
+
+
+def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data: bytes | None = None) -> dict:
     cropped_key = crop_receipt(bucket, key, image_data=image_data)
 
     if cropped_key:
@@ -246,7 +391,18 @@ def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None
         raw = image_data or s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         data = _to_jpeg(raw)
 
-    receipt_text, receipt_lines = _textract_lines(data)
+    receipt_text, receipt_lines, textract_blocks, textract_rows, line_height, step_tol = _textract_lines(data)
+
+    skew = _compute_skew_angle(textract_blocks)
+    SKEW_THRESHOLD = 1.0  # degrees — below this, noise outweighs benefit
+    correction = _deskew_correction(skew, SKEW_THRESHOLD)
+    deskew_applied = correction is not None
+    if deskew_applied:
+        print(f"DESKEW angle={skew:.2f}° correction={correction:.1f}° — rotating and re-running Textract")
+        data = _deskew_image(data, correction)
+        receipt_text, receipt_lines, textract_blocks, textract_rows, line_height, step_tol = _textract_lines(data)
+    else:
+        print(f"DESKEW skew={skew:.2f}° — no correction" if skew is not None else "DESKEW insufficient lines")
 
     response = bedrock.converse(
         modelId=BEDROCK_MODEL_ID,
@@ -259,19 +415,55 @@ def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None
                             "Here is text extracted by OCR from a receipt, in reading order "
                             "(items on the same row are separated by two spaces):\n\n"
                             f"{receipt_text}\n\n"
-                            "Extract all structured data from this receipt. "
+                            "Extract all structured data from this receipt and classify it. "
                             "Include every purchased product as a line item. "
                             "Exclude summary lines such as subtotal, GST, EFTPOS, cash, and change. "
                             "Return all prices and totals without currency symbols. "
+                            "quantity is always a bare number — no units. "
+                            "quantity × unit_price must equal price. "
                             "For multi-unit lines like 'ITEM NAME  $price' followed by '2 @  $1.79', "
                             "set quantity to '2', unit_price to '1.79', price to the line total. "
-                            "For weight-based lines like '1.741 Kg @  $1.49/Kg', "
-                            "set quantity to '1.741 Kg', unit_price to '1.49'. "
+                            "For weight-priced lines like '1.741 Kg @  $1.49/Kg  $2.59', "
+                            "set quantity to '1.741', price to the explicit line total (e.g. '2.59'), "
+                            "and unit_price to price / quantity (e.g. '1.49'). "
+                            "The line total on the right edge is more reliable than the per-kg rate in the middle — "
+                            "OCR errors in the per-kg column are common. "
+                            "If weight × unit_price does not equal the printed total, trust the total and "
+                            "recalculate unit_price = total / weight. "
+                            "For fixed-price items whose product name includes a weight/size (e.g. 'PAMS CHEESE BLOCK 1KG'), "
+                            "set quantity to '1' (or the count bought), unit_price to the item price, "
+                            "and package_size to the size label from the product name (e.g. '1KG'). "
+                            "A line that contains only a number, an '@' or similar separator, and a price "
+                            "(e.g. '3 @ $0.89', '2 @ $1.79 $3.58') is a quantity/unit-price breakdown "
+                            "for the item on the line immediately above — update that item's quantity and "
+                            "unit_price; do NOT create a new item for this line. "
+                            "OCR often misreads '@' as '!', 'J', 'e', or similar characters — "
+                            "treat any line matching the pattern <number> <symbol> <price> as a breakdown line. "
+                            "Do not create items for lines that consist only of numbers, symbols, or illegible text "
+                            "with no recognizable product name — either merge them into the preceding item as a "
+                            "quantity breakdown or skip them entirely. Never invent a product name. "
                             "If a discount appears as a product name repeated with a negative amount (e.g. 'BROCCOLI  -$0.58'), "
                             "merge it into the preceding item for that product: set discount to '-0.58' (negative). "
                             "price = (quantity * unit_price) + discount. "
                             "Do not create a separate line item for discounts. "
-                            "Use an empty string for any field you cannot determine."
+                            "Use an empty string for any field you cannot determine.\n\n"
+                            "Classification rules:\n"
+                            "- Generic descriptions ('Value Pack', 'Bulk Buy', 'Misc', bare SKU codes) "
+                            "-> item_category: 'other', nova_group: null\n"
+                            "- Non-food items always have nova_group: null\n"
+                            "- Receipt descriptions are often abbreviated; use context clues\n\n"
+                            "Classification examples:\n"
+                            "  'ANCHOR BLUE MILK 2L'      -> dairy,         nova_group: 1\n"
+                            "  'BROCCOLI'                 -> fruit_veg,     nova_group: 1\n"
+                            "  'MEADOWFRESH CHSE 500G'    -> dairy,         nova_group: 3\n"
+                            "  'HOMEBRAND OLIVE OIL 750ML'-> pantry,        nova_group: 2\n"
+                            "  'WATTIES TOMATOES 400G'    -> pantry,        nova_group: 3\n"
+                            "  'PRINGLES ORIG 165G'       -> snacks,        nova_group: 4\n"
+                            "  'COCA COLA NO SUGAR 1.5L'  -> beverages,     nova_group: 4\n"
+                            "  'SPEIGHTS GOLD 12PK'       -> alcohol,       nova_group: null\n"
+                            "  'FANCY FEAST CAT FOOD'     -> pet,           nova_group: null\n"
+                            "  'GLAD WRAP 30M'            -> household,     nova_group: null\n"
+                            "  'VALUE PACK'               -> other,         nova_group: null"
                         )
                     }
                 ],
@@ -295,26 +487,139 @@ def analyze_receipt(bucket: str, key: str, job_id: str, image_data: bytes | None
         f"input={usage.get('inputTokens')} output={usage.get('outputTokens')}"
     )
 
-    textract_debug_key = save_debug(job_id, {"lines": receipt_lines}, suffix="_textract")
-    claude_debug_key = save_debug(job_id, {
+    _validate_classification(extracted)
+    _fix_weighted_item_prices(extracted.get("items", []))
+    price_check = _verify_price_sum(extracted)
+    if price_check["warning"]:
+        print(f"PRICE_CHECK_WARNING {price_check}")
+
+    textract_debug_key = save_debug(job_id, user_id, {
+        "deskew": {
+            "angle_deg": round(skew, 3) if skew is not None else None,
+            "correction_deg": round(correction, 1) if correction is not None else None,
+            "applied": deskew_applied,
+            "threshold_deg": SKEW_THRESHOLD,
+        },
+        "row_grouping": {
+            "line_height": round(line_height, 4),
+            "step_tol": round(step_tol, 4),
+        },
+        "blocks": _debug_block_list(textract_blocks, textract_rows),
+        "lines": receipt_lines,
+    }, suffix="_textract")
+    claude_debug_key = save_debug(job_id, user_id, {
         "model": BEDROCK_MODEL_ID,
         "extracted": extracted,
         "usage": usage,
+        "price_check": price_check,
     })
 
     return {
+        "store_category": extracted.get("store_category") or "other",
         "vendor": extracted.get("vendor") or "Unknown vendor",
         "receipt_date": extracted.get("receipt_date") or "",
         "total": extracted.get("total") or "",
         "items": extracted.get("items") or [],
+        "price_check_warning": price_check["warning"],
+        "price_check_message": price_check["message"],
         "debug_s3_key": claude_debug_key,
         "textract_debug_s3_key": textract_debug_key,
         "cropped_s3_key": cropped_key,
     }
 
 
-def save_debug(job_id: str, payload: dict, suffix: str = "") -> str:
-    debug_key = f"debug/{job_id}{suffix}.json"
+def _validate_classification(extracted: dict) -> None:
+    """Clamp any out-of-vocabulary classification values to safe defaults in-place."""
+    if extracted.get("store_category") not in VALID_STORE_CATEGORIES:
+        extracted["store_category"] = "other"
+    for item in extracted.get("items", []):
+        if item.get("item_category") not in VALID_ITEM_CATEGORIES:
+            item["item_category"] = "other"
+        nova = item.get("nova_group")
+        if nova not in (1, 2, 3, 4, None):
+            item["nova_group"] = None
+
+
+def _to_float(val) -> float | None:
+    try:
+        cleaned = str(val).replace(",", "").replace("$", "").strip()
+        return float(cleaned) if cleaned else None
+    except (ValueError, TypeError):
+        return None
+
+
+def _fix_weighted_item_prices(items: list) -> int:
+    """For weight-priced items (non-integer quantity), trust price over unit_price.
+
+    If weight × unit_price ≠ price, recalculate unit_price = price / weight.
+    Returns the number of items corrected.
+    """
+    corrections = 0
+    for item in items:
+        qty = _to_float(item.get("quantity"))
+        unit_price = _to_float(item.get("unit_price"))
+        price = _to_float(item.get("price"))
+        if qty is None or unit_price is None or price is None:
+            continue
+        if qty == 0 or qty % 1 == 0:
+            continue
+        discount = _to_float(item.get("discount")) or 0.0
+        expected = round(qty * unit_price + discount, 2)
+        if abs(expected - price) >= 0.01:
+            corrected = round(price / qty, 2)
+            print(
+                f"WEIGHTED_PRICE_FIX qty={qty} unit_price={unit_price} price={price} "
+                f"expected={expected} corrected_unit_price={corrected}"
+            )
+            item["unit_price"] = str(corrected)
+            corrections += 1
+    return corrections
+
+
+def _verify_price_sum(extracted: dict) -> dict:
+    """Compare sum of item prices to the receipt total. Returns a dict with findings."""
+    total = _to_float(extracted.get("total"))
+    items = extracted.get("items", [])
+
+    item_prices = []
+    unparseable = []
+    for i, item in enumerate(items):
+        p = _to_float(item.get("price"))
+        if p is not None:
+            item_prices.append(p)
+        elif item.get("price"):
+            unparseable.append(i)
+
+    items_sum = round(sum(item_prices), 2)
+    result = {
+        "total": total,
+        "items_sum": items_sum,
+        "difference": round(items_sum - total, 2) if total is not None else None,
+        "unparseable_indices": unparseable,
+        "warning": False,
+        "message": "",
+    }
+
+    if total is None:
+        result["message"] = "total could not be parsed"
+        return result
+
+    diff = abs(items_sum - total)
+    if diff >= 0.01:
+        result["warning"] = True
+        direction = "over" if items_sum > total else "under"
+        result["message"] = (
+            f"item prices sum to {items_sum:.2f} but receipt total is {total:.2f} "
+            f"({direction} by {diff:.2f})"
+        )
+    else:
+        result["message"] = f"ok (difference {diff:.2f})"
+
+    return result
+
+
+def save_debug(job_id: str, user_id: str, payload: dict, suffix: str = "") -> str:
+    debug_key = f"debug/{user_id}/{job_id}{suffix}.json"
     s3.put_object(
         Bucket=S3_BUCKET,
         Key=debug_key,
@@ -499,6 +804,7 @@ def write_line_items(
     created_at: str,
     vendor: str,
     receipt_date: str,
+    store_category: str,
     items: list,
     expires_at: int,
 ) -> None:
@@ -518,16 +824,17 @@ def write_line_items(
                 return None
 
         record: dict = {
-            "user_id":      {"S": user_id},
-            "item_sk":      {"S": item_sk},
-            "job_id":       {"S": job_id},
-            "description":  {"S": description},
-            "desc_created": {"S": desc_created},
-            "email":        {"S": user_email},
-            "vendor":       {"S": vendor},
-            "receipt_date": {"S": receipt_date},
-            "created_at":   {"S": created_at},
-            "expires_at":   {"N": str(expires_at)},
+            "user_id":        {"S": user_id},
+            "item_sk":        {"S": item_sk},
+            "job_id":         {"S": job_id},
+            "description":    {"S": description},
+            "desc_created":   {"S": desc_created},
+            "email":          {"S": user_email},
+            "vendor":         {"S": vendor},
+            "receipt_date":   {"S": receipt_date},
+            "store_category": {"S": store_category},
+            "created_at":     {"S": created_at},
+            "expires_at":     {"N": str(expires_at)},
         }
 
         for field in ("quantity", "unit_price", "price", "discount"):
@@ -535,8 +842,20 @@ def write_line_items(
             if n:
                 record[field] = n
 
+        pkg_size = item.get("package_size", "").strip()
+        if pkg_size:
+            record["package_size"] = {"S": pkg_size}
+
+        item_category = item.get("item_category", "other")
+        if item_category in VALID_ITEM_CATEGORIES:
+            record["item_category"] = {"S": item_category}
+
+        nova = item.get("nova_group")
+        if nova in (1, 2, 3, 4):
+            record["nova_group"] = {"N": str(nova)}
+
         dynamodb.put_item(TableName=LINE_ITEMS_TABLE, Item=record)
-        print(f"LINE_ITEM_WRITTEN {job_id}#{i:03d} {description!r}")
+        print(f"LINE_ITEM_WRITTEN {job_id}#{i:03d} {description!r} [{item_category}]")
 
 
 def update_job(job_id: str, fields: dict) -> None:

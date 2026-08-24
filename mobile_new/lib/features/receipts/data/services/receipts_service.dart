@@ -26,7 +26,7 @@ class ReceiptsService {
     String jobId, {
     String? vendor,
     String? receiptDate,
-    List<Map<String, String>>? items,
+    List<Map<String, dynamic>>? items,
   }) async {
     final response = await _dio.patch<Map<String, dynamic>>(
       '${AppConfig.apiBaseUrl}/receipts/$jobId',

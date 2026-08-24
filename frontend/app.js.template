@@ -49,7 +49,41 @@ async function exchangeCode(code) {
   const data = await resp.json();
   sessionStorage.setItem("id_token", data.id_token);
   sessionStorage.setItem("access_token", data.access_token);
+  if (data.refresh_token) sessionStorage.setItem("refresh_token", data.refresh_token);
   history.replaceState({}, document.title, window.location.pathname);
+}
+
+async function refreshTokens() {
+  const refreshToken = sessionStorage.getItem("refresh_token");
+  if (!refreshToken) throw new Error("No refresh token");
+  const params = new URLSearchParams({
+    grant_type:    "refresh_token",
+    client_id:     CONFIG.cognitoClientId,
+    refresh_token: refreshToken,
+  });
+  const resp = await fetch(CONFIG.cognitoTokenUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
+  });
+  if (!resp.ok) throw new Error(`Token refresh failed: ${resp.status}`);
+  const data = await resp.json();
+  sessionStorage.setItem("id_token", data.id_token);
+  sessionStorage.setItem("access_token", data.access_token);
+}
+
+async function apiFetch(url, options = {}) {
+  const authHeaders = { "Authorization": `Bearer ${getToken()}` };
+  const resp = await fetch(url, { ...options, headers: { ...authHeaders, ...options.headers } });
+  if (resp.status !== 401) return resp;
+  try {
+    await refreshTokens();
+  } catch (_) {
+    logout();
+    return resp;
+  }
+  const retryHeaders = { "Authorization": `Bearer ${getToken()}` };
+  return fetch(url, { ...options, headers: { ...retryHeaders, ...options.headers } });
 }
 
 // ── Initialisation ────────────────────────────────────────────────────────────
@@ -111,7 +145,7 @@ function showError(msg) {
 
 function apiErrorMessage(status) {
   if (status === 401 || status === 403) return "Your session has expired — sign in again.";
-  if (status === 429) return "You've reached the daily scan limit. Try again tomorrow.";
+  if (status === 429) return "Upload limit reached. Try again tomorrow.";
   if (status >= 500) return "Something went wrong on our end. Try again in a moment.";
   return `Unexpected error (${status}).`;
 }
@@ -132,7 +166,9 @@ function escapeHtml(s) {
   return String(s || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 // ── File selection ────────────────────────────────────────────────────────────
@@ -209,8 +245,9 @@ function renderQueue() {
     li.innerHTML = `
       <span class="queue-name">${escapeHtml(file.name)}</span>
       <span class="queue-size">${(file.size / 1024).toFixed(0)} KB</span>
-      <button class="queue-remove" data-index="${i}" aria-label="Remove ${escapeHtml(file.name)}">✕</button>
+      <button class="queue-remove" data-index="${i}">✕</button>
     `;
+    li.querySelector(".queue-remove").setAttribute("aria-label", `Remove ${file.name}`);
     list.appendChild(li);
   });
 }
@@ -235,17 +272,16 @@ async function handleUpload() {
     // Step 1 — get presigned URLs in parallel
     const urlResults = await Promise.all(
       filesToProcess.map(file =>
-        fetch(`${CONFIG.apiBaseUrl}/upload-url`, {
+        apiFetch(`${CONFIG.apiBaseUrl}/upload-url`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${getToken()}`,
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ contentType: file.type }),
         }).then(async r => {
           if (!r.ok) {
             const b = await r.json().catch(() => ({}));
-            throw new Error(b.error || apiErrorMessage(r.status));
+            const err = new Error(b.error || apiErrorMessage(r.status));
+            err.httpStatus = r.status;
+            throw err;
           }
           return r.json();
         })
@@ -285,7 +321,9 @@ async function handleUpload() {
     selectedFiles = filesToProcess;
     renderQueue();
     showMainSection("upload-section");
-    showError(`Upload failed: ${err.message}`);
+    // Rate-limit and auth errors: show the server message directly without a generic prefix
+    const knownStatus = err.httpStatus === 429 || err.httpStatus === 401 || err.httpStatus === 403;
+    showError(knownStatus ? err.message : `Upload failed: ${err.message}`);
   } finally {
     scanAbortController = null;
   }
@@ -295,10 +333,7 @@ async function pollUntilDone(jobId, signal, count = 0) {
   if (signal && signal.aborted) return { jobId, status: "CANCELLED" };
   if (count >= MAX_POLLS) return { jobId, status: "FAILED", reason: "timeout" };
   try {
-    const resp = await fetch(`${CONFIG.apiBaseUrl}/jobs/${jobId}`, {
-      headers: { "Authorization": `Bearer ${getToken()}` },
-      signal,
-    });
+    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/jobs/${jobId}`, { signal });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const job = await resp.json();
     if (job.status === "COMPLETE" || job.status === "FAILED") return job;
@@ -348,7 +383,7 @@ function buildReceiptCard(job) {
       <tbody>
         ${items.map(it => `
           <tr>
-            <td>${escapeHtml(it.description)}</td>
+            <td>${escapeHtml(it.description)}${it.package_size ? ` <span class="pkg-size">${escapeHtml(it.package_size)}</span>` : ""}</td>
             <td>${escapeHtml(it.quantity)}</td>
             <td>${escapeHtml(it.unit_price)}</td>
             ${hasDiscount ? `<td>${it.discount ? escapeHtml(it.discount) : ""}</td>` : ""}
@@ -357,12 +392,24 @@ function buildReceiptCard(job) {
       </tbody>
     </table>` : "";
 
+  const categoryLabel = job.storeCategory
+    ? `<span class="store-category-badge">${escapeHtml(job.storeCategory.replace(/_/g, " "))}</span>`
+    : "";
+
+  const priceWarning = job.priceCheckWarning
+    ? `<div class="price-check-warning">Price check: ${escapeHtml(job.priceCheckMessage || "item prices do not match total")} — use Edit to correct</div>`
+    : "";
+
   card.innerHTML = `
     <div class="receipt-header">
       <span class="receipt-vendor">${escapeHtml(job.vendor || "Unknown vendor")}</span>
       ${job.total ? `<span class="receipt-total">${escapeHtml(job.total)}</span>` : ""}
     </div>
-    ${job.receiptDate ? `<div class="receipt-meta"><span class="receipt-date">${escapeHtml(formatDate(job.receiptDate))}</span></div>` : ""}
+    <div class="receipt-meta">
+      ${job.receiptDate ? `<span class="receipt-date">${escapeHtml(formatDate(job.receiptDate))}</span>` : ""}
+      ${categoryLabel}
+    </div>
+    ${priceWarning}
     ${itemsHtml}
   `;
   return card;
@@ -372,9 +419,7 @@ function buildReceiptCard(job) {
 
 async function loadHistory() {
   try {
-    const resp = await fetch(`${CONFIG.apiBaseUrl}/receipts`, {
-      headers: { "Authorization": `Bearer ${getToken()}` },
-    });
+    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts`);
     if (!resp.ok) return;
     const data = await resp.json();
     renderHistory(data.receipts || []);
@@ -402,15 +447,31 @@ function buildHistoryCard(job) {
 
   if (job.textractDebugUrl || job.debugUrl || job.croppedImageUrl) {
     const dl = document.createElement("div");
-    dl.style.cssText = "margin-top:0.5rem;display:flex;gap:0.5rem;flex-wrap:wrap";
+    dl.style.cssText = "margin-top:0.5rem;display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center";
+
     if (job.croppedImageUrl) {
-      dl.innerHTML += `<a href="${escapeHtml(job.croppedImageUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Cropped image</a>`;
+      const a = document.createElement("a");
+      a.href = job.croppedImageUrl;
+      a.className = "btn btn-secondary";
+      a.style.fontSize = "0.8rem";
+      a.textContent = "Cropped image";
+      dl.appendChild(a);
     }
     if (job.textractDebugUrl) {
-      dl.innerHTML += `<a href="${escapeHtml(job.textractDebugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">Raw OCR (Textract)</a>`;
+      const btn = document.createElement("button");
+      btn.className = "btn btn-secondary";
+      btn.style.fontSize = "0.8rem";
+      btn.textContent = "OCR debug";
+      btn.addEventListener("click", () => toggleOcrDebug(btn, job.textractDebugUrl, card, job.jobId));
+      dl.appendChild(btn);
     }
     if (job.debugUrl) {
-      dl.innerHTML += `<a href="${escapeHtml(job.debugUrl)}" class="btn btn-secondary" style="font-size:0.8rem">AI parsed (Haiku)</a>`;
+      const a = document.createElement("a");
+      a.href = job.debugUrl;
+      a.className = "btn btn-secondary";
+      a.style.fontSize = "0.8rem";
+      a.textContent = "AI extraction JSON";
+      dl.appendChild(a);
     }
     card.appendChild(dl);
   }
@@ -425,70 +486,147 @@ function buildHistoryCard(job) {
 }
 
 async function showEditModal(job) {
-  // Build modal overlay
   const overlay = document.createElement("div");
-  overlay.style.cssText = `
-    position:fixed;inset:0;background:rgba(0,0,0,0.5);
-    display:flex;align-items:center;justify-content:center;z-index:1000`;
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:1000";
 
-  const items = Array.isArray(job.items) ? job.items : [];
-  const itemFields = items.map((it, i) => `
-    <div style="margin-bottom:0.5rem">
-      <label style="display:block;font-size:0.8rem;margin-bottom:2px">Item ${i + 1}</label>
-      <input class="edit-item" data-index="${i}" type="text" value="${escapeHtml(it.description || '')}"
-        style="width:100%;padding:0.4rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
-    </div>`).join("");
+  const receiptTotal = parseFloat(job.total) || 0;
 
-  overlay.innerHTML = `
-    <div style="background:#fff;border-radius:8px;padding:1.5rem;width:min(480px,90vw);max-height:90vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.2)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-        <h3 style="margin:0">Edit Receipt</h3>
-        <button id="edit-close" style="background:none;border:none;cursor:pointer;font-size:1.2rem">✕</button>
+  // Mutable working copy — preserved through add/delete/reorder operations
+  let editItems = (Array.isArray(job.items) ? job.items : []).map(it => ({ ...it }));
+
+  // Static modal shell — no user data injected via innerHTML
+  const modal = document.createElement("div");
+  modal.style.cssText = "background:#fff;border-radius:8px;padding:1.5rem;width:min(560px,92vw);max-height:90vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.2)";
+  modal.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <h3 style="margin:0">Edit Receipt</h3>
+      <button id="edit-close" style="background:none;border:none;cursor:pointer;font-size:1.2rem">&#x2715;</button>
+    </div>
+    <div style="margin-bottom:0.75rem">
+      <label style="display:block;font-size:0.8rem;margin-bottom:2px">Store / Vendor</label>
+      <input id="edit-vendor" type="text" style="width:100%;padding:0.4rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
+    </div>
+    <div style="margin-bottom:0.75rem">
+      <label style="display:block;font-size:0.8rem;margin-bottom:2px">Receipt date (YYYY-MM-DD)</label>
+      <input id="edit-date" type="text" style="width:100%;padding:0.4rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
+    </div>
+    <div style="margin-bottom:0.75rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem">
+        <p style="font-weight:500;margin:0">Line items</p>
+        <button id="add-item-btn" class="btn btn-secondary" style="font-size:0.75rem;padding:0.25rem 0.7rem">+ Add item</button>
       </div>
-      <div style="margin-bottom:0.75rem">
-        <label style="display:block;font-size:0.8rem;margin-bottom:2px">Store / Vendor</label>
-        <input id="edit-vendor" type="text" value="${escapeHtml(job.vendor || '')}"
-          style="width:100%;padding:0.4rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
-      </div>
-      <div style="margin-bottom:0.75rem">
-        <label style="display:block;font-size:0.8rem;margin-bottom:2px">Receipt date</label>
-        <input id="edit-date" type="text" value="${escapeHtml(job.receiptDate || '')}"
-          style="width:100%;padding:0.4rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
-      </div>
-      ${itemFields ? `<div style="margin-bottom:0.75rem"><p style="font-weight:500;margin:0 0 0.5rem">Line items</p>${itemFields}</div>` : ""}
-      <div style="display:flex;gap:0.5rem;justify-content:flex-end">
-        <button id="edit-cancel" class="btn btn-secondary">Cancel</button>
-        <button id="edit-save" class="btn">Save</button>
-      </div>
+      <div id="items-container"></div>
+      <div id="price-sum-bar" style="margin-top:0.5rem;padding:0.4rem 0.6rem;border-radius:4px;font-size:0.8rem;background:#f5f5f5"></div>
+    </div>
+    <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+      <button id="edit-cancel" class="btn btn-secondary">Cancel</button>
+      <button id="edit-save" class="btn">Save</button>
     </div>`;
 
+  // Set values via DOM (avoids XSS from user-controlled data in innerHTML)
+  modal.querySelector("#edit-vendor").value = job.vendor || "";
+  modal.querySelector("#edit-date").value = job.receiptDate || "";
+
+  overlay.appendChild(modal);
   document.body.appendChild(overlay);
 
+  function updatePriceSum() {
+    const bar = modal.querySelector("#price-sum-bar");
+    if (!bar) return;
+    let sum = 0;
+    editItems.forEach(it => {
+      const v = parseFloat(String(it.price || "").replace(/[,$]/g, "").trim());
+      if (!isNaN(v)) sum += v;
+    });
+    sum = Math.round(sum * 100) / 100;
+    const diff = Math.round((sum - receiptTotal) * 100) / 100;
+    const ok = Math.abs(diff) <= 0.01;
+    bar.style.background = ok ? "#e8f5e9" : "#fff3e0";
+    bar.style.color = ok ? "#2e7d32" : "#e65100";
+    bar.textContent = `Items sum: $${sum.toFixed(2)} / Receipt total: $${receiptTotal.toFixed(2)}`
+      + (ok ? "  ✓" : `  — ${diff > 0 ? "over" : "under"} by $${Math.abs(diff).toFixed(2)}`);
+  }
+
+  function makeInput(placeholder, value, width, onChange) {
+    const inp = document.createElement("input");
+    inp.type = "text";
+    inp.placeholder = placeholder;
+    inp.value = value || "";
+    inp.style.cssText = `width:${width};padding:0.32rem 0.4rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box;font-size:0.82rem`;
+    inp.addEventListener("input", () => onChange(inp.value));
+    return inp;
+  }
+
+  function renderItems() {
+    const container = modal.querySelector("#items-container");
+    container.innerHTML = "";
+    editItems.forEach((it, i) => {
+      const row = document.createElement("div");
+      row.style.cssText = "margin-bottom:0.5rem;border:1px solid #eee;border-radius:4px;padding:0.45rem 0.5rem";
+
+      // Row 1: index label + description + delete button
+      const topRow = document.createElement("div");
+      topRow.style.cssText = "display:flex;gap:0.3rem;align-items:center;margin-bottom:3px";
+
+      const lbl = document.createElement("span");
+      lbl.style.cssText = "font-size:0.7rem;color:#aaa;min-width:1.4rem;flex-shrink:0";
+      lbl.textContent = `${i + 1}.`;
+      topRow.appendChild(lbl);
+
+      topRow.appendChild(makeInput("Description", it.description, "100%", v => { editItems[i].description = v; }));
+
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.textContent = "×";
+      delBtn.title = "Delete item";
+      delBtn.style.cssText = "flex-shrink:0;padding:0.2rem 0.55rem;background:#fee2e2;border:none;border-radius:4px;color:#dc2626;cursor:pointer;font-size:1rem;line-height:1";
+      delBtn.addEventListener("click", () => { editItems.splice(i, 1); renderItems(); updatePriceSum(); });
+      topRow.appendChild(delBtn);
+      row.appendChild(topRow);
+
+      // Row 2: numeric fields
+      const numRow = document.createElement("div");
+      numRow.style.cssText = "display:flex;gap:0.3rem";
+      const numFields = [
+        { key: "quantity",     label: "Qty",        w: "15%" },
+        { key: "package_size", label: "Pkg size",   w: "15%", text: true },
+        { key: "unit_price",   label: "Unit price", w: "22%" },
+        { key: "price",        label: "Price",      w: "22%" },
+        { key: "discount",     label: "Discount",   w: "22%" },
+      ];
+      numFields.forEach(({ key, label, w }) => {
+        const inp = makeInput(label, it[key], w, v => { editItems[i][key] = v; if (key === "price") updatePriceSum(); });
+        numRow.appendChild(inp);
+      });
+      row.appendChild(numRow);
+      container.appendChild(row);
+    });
+    updatePriceSum();
+  }
+
+  renderItems();
+
+  modal.querySelector("#add-item-btn").addEventListener("click", () => {
+    editItems.push({ description: "", quantity: "", package_size: "", unit_price: "", price: "", discount: "" });
+    renderItems();
+  });
+
   const close = () => document.body.removeChild(overlay);
-  overlay.querySelector("#edit-close").addEventListener("click", close);
-  overlay.querySelector("#edit-cancel").addEventListener("click", close);
+  modal.querySelector("#edit-close").addEventListener("click", close);
+  modal.querySelector("#edit-cancel").addEventListener("click", close);
   overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
 
-  overlay.querySelector("#edit-save").addEventListener("click", async () => {
-    const vendor = overlay.querySelector("#edit-vendor").value.trim();
-    const receiptDate = overlay.querySelector("#edit-date").value.trim();
-    const itemInputs = overlay.querySelectorAll(".edit-item");
-    const patchedItems = Array.from(itemInputs).map(inp => ({
-      description: inp.value.trim(),
-    }));
-
-    const saveBtn = overlay.querySelector("#edit-save");
+  modal.querySelector("#edit-save").addEventListener("click", async () => {
+    const vendor = modal.querySelector("#edit-vendor").value.trim();
+    const receiptDate = modal.querySelector("#edit-date").value.trim();
+    const saveBtn = modal.querySelector("#edit-save");
     saveBtn.disabled = true;
     saveBtn.textContent = "Saving…";
-
     try {
-      const resp = await fetch(`${CONFIG.apiBaseUrl}/receipts/${job.jobId}`, {
+      const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts/${job.jobId}`, {
         method: "PATCH",
-        headers: {
-          "Authorization": `Bearer ${getToken()}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ vendor, receiptDate, items: patchedItems }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vendor, receiptDate, items: editItems }),
       });
       if (!resp.ok) throw new Error(await resp.text());
       close();
@@ -499,6 +637,189 @@ async function showEditModal(job) {
       alert("Failed to save: " + err.message);
     }
   });
+}
+
+// ── OCR debug panel ───────────────────────────────────────────────────────────
+
+async function toggleOcrDebug(btn, url, card, jobId) {
+  const existing = card.querySelector(".ocr-debug-panel");
+  if (existing) {
+    existing.remove();
+    btn.textContent = "OCR debug";
+    return;
+  }
+
+  btn.textContent = "Loading…";
+  btn.disabled = true;
+
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+
+    const panel = document.createElement("div");
+    panel.className = "ocr-debug-panel";
+
+    // ── Deskew row ────────────────────────────────────────────────────────────
+    const deskew = data.deskew;
+    const deskewRow = document.createElement("div");
+    deskewRow.className = "debug-deskew-row";
+    if (deskew) {
+      const angle = deskew.angle_deg != null
+        ? `${deskew.angle_deg.toFixed(2)}°`
+        : "insufficient lines for detection";
+      let applied;
+      if (deskew.applied) {
+        const snap = deskew.correction_deg != null ? ` → snapped to ${deskew.correction_deg}°` : "";
+        applied = `corrected${snap}`;
+      } else if (deskew.angle_deg == null) {
+        applied = "insufficient lines for detection";
+      } else {
+        const absAngle = Math.abs(deskew.angle_deg);
+        if (absAngle < deskew.threshold_deg) {
+          applied = `below threshold (±${deskew.threshold_deg}°), no correction`;
+        } else {
+          applied = `outside correction range — no correction`;
+        }
+      }
+      deskewRow.textContent = `Deskew: ${angle} — ${applied}`;
+      deskewRow.classList.add(deskew.applied ? "debug-deskew--corrected" : "debug-deskew--ok");
+    } else {
+      deskewRow.textContent = "Deskew: no data (scan predates this feature)";
+      deskewRow.classList.add("debug-deskew--ok");
+    }
+    panel.appendChild(deskewRow);
+
+    // ── Row-grouping calibration row ──────────────────────────────────────────
+    const rg = data.row_grouping;
+    if (rg) {
+      const rgRow = document.createElement("div");
+      rgRow.className = "debug-deskew-row debug-deskew--ok";
+      const lhPct = (rg.line_height * 100).toFixed(2);
+      const stPct = (rg.step_tol * 100).toFixed(2);
+      rgRow.textContent = `Row grouping: line height ${lhPct}%  step tolerance ${stPct}%`;
+      panel.appendChild(rgRow);
+    }
+
+    // ── Blocks table (pre-grouping) ───────────────────────────────────────────
+    const blocks = data.blocks;
+    if (blocks && blocks.length > 0) {
+      const bHeading = document.createElement("div");
+      bHeading.className = "debug-lines-heading";
+      bHeading.textContent = `Textract blocks — ${blocks.length} blocks → ${(blocks[blocks.length - 1].row + 1)} rows`;
+      panel.appendChild(bHeading);
+
+      const table = document.createElement("table");
+      table.className = "debug-blocks-table";
+
+      let lastRow = -1;
+      blocks.forEach(block => {
+        if (block.row !== lastRow && lastRow !== -1) {
+          const sep = table.insertRow();
+          sep.className = "debug-row-sep";
+          sep.insertCell().colSpan = 3;
+        }
+        lastRow = block.row;
+
+        const tr = table.insertRow();
+        const lowConf = block.confidence < 85;
+        if (lowConf) tr.className = "debug-block--low-conf";
+
+        const confTd = tr.insertCell();
+        confTd.className = "debug-block-conf";
+        confTd.textContent = `${block.confidence.toFixed(0)}%`;
+
+        const textTd = tr.insertCell();
+        textTd.className = "debug-block-text";
+        textTd.textContent = block.text;
+
+        const posTd = tr.insertCell();
+        posTd.className = "debug-block-pos";
+        posTd.textContent = `↕${(block.top * 100).toFixed(1)}% ←${(block.left * 100).toFixed(0)}%`;
+      });
+      panel.appendChild(table);
+    }
+
+    // ── Merged lines (what Claude receives) ───────────────────────────────────
+    const lines = data.lines || [];
+    if (lines.length > 0) {
+      const lHeading = document.createElement("div");
+      lHeading.className = "debug-lines-heading";
+      lHeading.style.marginTop = "0.6rem";
+      lHeading.textContent = `Merged text sent to Claude (${lines.length} lines)`;
+      panel.appendChild(lHeading);
+
+      const ol = document.createElement("ol");
+      ol.className = "debug-lines";
+      lines.forEach(line => {
+        const li = document.createElement("li");
+        li.textContent = line;
+        ol.appendChild(li);
+      });
+      panel.appendChild(ol);
+    }
+
+    // ── Download test fixture ─────────────────────────────────────────────────
+    const dlBtn = document.createElement("button");
+    dlBtn.className = "btn btn-secondary";
+    dlBtn.style.cssText = "margin-top:0.75rem;font-size:0.75rem;";
+    dlBtn.textContent = "Download test fixture (.py)";
+    dlBtn.addEventListener("click", () => downloadTestFixture(data, jobId));
+    panel.appendChild(dlBtn);
+
+    card.appendChild(panel);
+    btn.textContent = "Hide OCR";
+  } catch (err) {
+    console.error("OCR debug load failed:", err);
+    btn.textContent = "OCR debug";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function downloadTestFixture(data, jobId) {
+  const blocks = data.blocks || [];
+  const lines  = data.lines  || [];
+
+  // Align _block() calls on the top_pct column for readability
+  const maxTextLen = Math.max(...blocks.map(b => b.text.length), 0);
+
+  const blockLines = blocks.map(b => {
+    const escaped  = b.text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const topPct   = (b.top  * 100).toFixed(1);
+    const leftPct  = Math.round(b.left * 100);
+    const pad      = " ".repeat(maxTextLen - b.text.length);
+    return `    _block("${escaped}",${pad}  ${topPct.padStart(5)},  ${String(leftPct).padStart(2)}),`;
+  });
+
+  const expectedLines = lines.map(l => {
+    const escaped = l.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    return `    "${escaped}",`;
+  });
+
+  const shortId  = (jobId || "unknown").slice(0, 8);
+  const rowCount = lines.length;
+
+  const content = [
+    `# ${blocks.length} blocks → ${rowCount} rows`,
+    `# job_id: ${jobId || "unknown"}`,
+    ``,
+    `BLOCKS = [`,
+    ...blockLines,
+    `]`,
+    ``,
+    `EXPECTED = [`,
+    ...expectedLines,
+    `]`,
+  ].join("\n");
+
+  const blob = new Blob([content], { type: "text/x-python" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = `test_fixture_${shortId}.py`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── Event listeners ───────────────────────────────────────────────────────────
