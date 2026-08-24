@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from line_grouping import group_blocks
+from pricing import check_price_sum, to_float
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
 LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
@@ -489,7 +490,7 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
 
     _validate_classification(extracted)
     _fix_weighted_item_prices(extracted.get("items", []))
-    price_check = _verify_price_sum(extracted)
+    price_check = check_price_sum(extracted.get("items", []), extracted.get("total", ""))
     if price_check["warning"]:
         print(f"PRICE_CHECK_WARNING {price_check}")
 
@@ -540,14 +541,6 @@ def _validate_classification(extracted: dict) -> None:
             item["nova_group"] = None
 
 
-def _to_float(val) -> float | None:
-    try:
-        cleaned = str(val).replace(",", "").replace("$", "").strip()
-        return float(cleaned) if cleaned else None
-    except (ValueError, TypeError):
-        return None
-
-
 def _fix_weighted_item_prices(items: list) -> int:
     """For weight-priced items (non-integer quantity), trust price over unit_price.
 
@@ -575,47 +568,6 @@ def _fix_weighted_item_prices(items: list) -> int:
             corrections += 1
     return corrections
 
-
-def _verify_price_sum(extracted: dict) -> dict:
-    """Compare sum of item prices to the receipt total. Returns a dict with findings."""
-    total = _to_float(extracted.get("total"))
-    items = extracted.get("items", [])
-
-    item_prices = []
-    unparseable = []
-    for i, item in enumerate(items):
-        p = _to_float(item.get("price"))
-        if p is not None:
-            item_prices.append(p)
-        elif item.get("price"):
-            unparseable.append(i)
-
-    items_sum = round(sum(item_prices), 2)
-    result = {
-        "total": total,
-        "items_sum": items_sum,
-        "difference": round(items_sum - total, 2) if total is not None else None,
-        "unparseable_indices": unparseable,
-        "warning": False,
-        "message": "",
-    }
-
-    if total is None:
-        result["message"] = "total could not be parsed"
-        return result
-
-    diff = abs(items_sum - total)
-    if diff >= 0.01:
-        result["warning"] = True
-        direction = "over" if items_sum > total else "under"
-        result["message"] = (
-            f"item prices sum to {items_sum:.2f} but receipt total is {total:.2f} "
-            f"({direction} by {diff:.2f})"
-        )
-    else:
-        result["message"] = f"ok (difference {diff:.2f})"
-
-    return result
 
 
 def save_debug(job_id: str, user_id: str, payload: dict, suffix: str = "") -> str:

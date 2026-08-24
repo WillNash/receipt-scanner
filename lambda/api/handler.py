@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 from botocore.config import Config
+from pricing import check_price_sum
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
 LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
@@ -362,26 +363,7 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
 
 
 def _recheck_prices(items: list, total_str: str) -> dict:
-    def to_float(val):
-        try:
-            cleaned = str(val).replace(",", "").replace("$", "").strip()
-            return float(cleaned) if cleaned else None
-        except (ValueError, TypeError):
-            return None
-
-    total = to_float(total_str)
-    if total is None:
-        return {"warning": False, "message": ""}
-
-    items_sum = round(sum(p for p in (to_float(it.get("price")) for it in items) if p is not None), 2)
-    diff = abs(items_sum - total)
-    if diff >= 0.01:
-        direction = "over" if items_sum > total else "under"
-        return {
-            "warning": True,
-            "message": f"item prices sum to {items_sum:.2f} but receipt total is {total:.2f} ({direction} by {diff:.2f})",
-        }
-    return {"warning": False, "message": f"ok (difference {diff:.2f})"}
+    return check_price_sum(items, total_str)
 
 
 def _replace_line_items(job_id: str, user_id: str, job_record: dict, created_at: str, new_items: list) -> None:
