@@ -497,5 +497,170 @@ class TestGroupBlocksMay2026(unittest.TestCase):
         self.assertFalse(any("PAMS WASH" in l and "$" in l for l in result))
 
 
+# ---------------------------------------------------------------------------
+# Fixture: PAK'nSAVE Palmerston North, 24 Aug 2026 (65 blocks, 48 rows)
+# job_id: 72d08995-ce1f-42ce-8e85-863253ed0171
+# Key case: $13.18 and $9.58 are right-edge price orphans whose Y sits above
+# the quantity-breakdown row they belong to (receipt curl artefact). Phase 3
+# of group_blocks must absorb them into the row below.
+# ---------------------------------------------------------------------------
+PAKNSAVE_20260824 = [
+    _block("LPAKINSAVE",                                  6.2,  20),
+    _block("**** PELMERSION NORTH **",                   10.9,  33),
+    _block("32) FERGUSON STREET",                        12.8,  41),
+    _block("SDBTJ LIMITED",                              14.6,  45),
+    _block("PF: ()6) 356-4043",                          15.9,  42),
+    _block("Order online end collect from the store",    18.1,  28),
+    _block("Go to pakinsave.co.nz/shop",                 20.2,  37),
+    _block("KIA KAMA. STRESSED OR OVERWHELMED?",         21.1,  31),
+    _block("CALL OF TEXT 1737 FOR FREE KORERO",          22.7,  31),
+    _block("WHITTAKERS BLOCK RLM / RAISIN 2500",         24.4,  20),
+    _block("$13.18",                                     25.3,  79),
+    _block("20",                                         26.3,  31),
+    _block("$6.59",                                      26.4,  42),
+    _block("PAMS VALUE MILK STENDARD 2",                 27.4,  20),
+    _block("$9.58",                                      28.4,  81),
+    _block("20",                                         29.2,  31),
+    _block("14.79",                                      29.4,  42),
+    _block("Supervisor #76",                             30.4,  19),
+    _block("STOKE IPA 330M 12F) CAN",                    31.9,  19),
+    _block("$22.99",                                     31.6,  79),
+    _block("5 BALANCE QUE",                              34.9,  20),
+    _block("$45.75",                                     34.6,  79),
+    _block("EFTPOS",                                     36.4,  23),
+    _block("$45.75",                                     36.1,  79),
+    _block("**************95",                           38.0,  26),
+    _block("SUB TOTAL",                                  40.8,  22),
+    _block("$39.78",                                     40.7,  78),
+    _block("TOTAL GST",                                  42.2,  22),
+    _block("$5.97",                                      42.2,  80),
+    _block("TOTAL",                                      43.7,  22),
+    _block("$45.75",                                     43.7,  78),
+    _block("CHANGE",                                     46.6,  18),
+    _block("$0.00",                                      46.8,  79),
+    _block("PAK N SAVE PALMERSTO",                       49.4,  15),
+    _block("327 FERGUSON STREET",                        50.9,  15),
+    _block("PALMERSTON NORTH",                           52.4,  15),
+    _block("EFTPOS",                                     55.5,  29),
+    _block("TERMINAL",                                   56.8,  14),
+    _block("04155010",                                   57.1,  42),
+    _block("TIME",                                       58.2,  14),
+    _block("24ALg26 20 15",                              58.5,  35),
+    _block("TRAN 087091",                                59.7,  14),
+    _block("CHEQUE",                                     60.1,  44),
+    _block("EFTPOS",                                     61.2,  14),
+    _block("CARD",                                       62.6,  13),
+    _block("8996",                                       63.0,  46),
+    _block("PURCHASE",                                   64.0,  13),
+    _block("72045.75",                                   64.4,  41),
+    _block("TOTAL",                                      65.5,  13),
+    _block("M2045 75",                                   65.9,  41),
+    _block("ACCEPTED",                                   68.6,  27),
+    _block("CUSTOMER COPY",                              73.0,  23),
+    _block("Join Club anc get ready to shop smarter.",   74.4,  21),
+    _block("Visit clubplus.co.nz",                       76.1,  35),
+    _block("CASHIER NAME: CATHERINE M",                  78.7,  14),
+    _block("24/08/2026 20:45:28 05082 010 3143 0085",    80.2,  14),
+    _block("TAX INVOICE",                                82.1,  41),
+    _block("**** GST 40: 138-395-464 ****",              83.5,  29),
+    _block("All items GST inclusive",                    85.0,  33),
+    _block("unless othervise specified by (*)",          86.4,  26),
+    _block("******** EE De TO WIN $500 ********",        89.5,  25),
+    _block("Tall us for Vd did today and go",            90.9,  27),
+    _block("into the sinthly draw to win a",             92.6,  28),
+    _block("SOC Pat'nSeve gift card",                    94.1,  34),
+    _block("Have your script prknsave.co.mazeurveys",    95.3,  21),
+]
+
+PAKNSAVE_20260824_EXPECTED = [
+    "LPAKINSAVE",
+    "**** PELMERSION NORTH **",
+    "32) FERGUSON STREET",
+    "SDBTJ LIMITED",
+    "PF: ()6) 356-4043",
+    "Order online end collect from the store",
+    "Go to pakinsave.co.nz/shop",
+    "KIA KAMA. STRESSED OR OVERWHELMED?",
+    "CALL OF TEXT 1737 FOR FREE KORERO",
+    "WHITTAKERS BLOCK RLM / RAISIN 2500",
+    "20  $6.59  $13.18",
+    "PAMS VALUE MILK STENDARD 2",
+    "20  14.79  $9.58",
+    "Supervisor #76",
+    "STOKE IPA 330M 12F) CAN  $22.99",
+    "5 BALANCE QUE  $45.75",
+    "EFTPOS  $45.75",
+    "**************95",
+    "SUB TOTAL  $39.78",
+    "TOTAL GST  $5.97",
+    "TOTAL  $45.75",
+    "CHANGE  $0.00",
+    "PAK N SAVE PALMERSTO",
+    "327 FERGUSON STREET",
+    "PALMERSTON NORTH",
+    "EFTPOS",
+    "TERMINAL  04155010",
+    "TIME  24ALg26 20 15",
+    "TRAN 087091  CHEQUE",
+    "EFTPOS",
+    "CARD  8996",
+    "PURCHASE  72045.75",
+    "TOTAL  M2045 75",
+    "ACCEPTED",
+    "CUSTOMER COPY",
+    "Join Club anc get ready to shop smarter.",
+    "Visit clubplus.co.nz",
+    "CASHIER NAME: CATHERINE M",
+    "24/08/2026 20:45:28 05082 010 3143 0085",
+    "TAX INVOICE",
+    "**** GST 40: 138-395-464 ****",
+    "All items GST inclusive",
+    "unless othervise specified by (*)",
+    "******** EE De TO WIN $500 ********",
+    "Tall us for Vd did today and go",
+    "into the sinthly draw to win a",
+    "SOC Pat'nSeve gift card",
+    "Have your script prknsave.co.mazeurveys",
+]
+
+
+class TestGroupBlocksAug2026b(unittest.TestCase):
+    def test_row_count(self):
+        rows, _, _ = group_blocks(PAKNSAVE_20260824)
+        self.assertEqual(len(rows), 48)
+
+    def test_all_blocks_assigned(self):
+        rows, _, _ = group_blocks(PAKNSAVE_20260824)
+        self.assertEqual(sum(len(r) for r in rows), len(PAKNSAVE_20260824))
+
+    def test_reading_order(self):
+        rows, _, _ = group_blocks(PAKNSAVE_20260824)
+        tops = [min(b["Geometry"]["BoundingBox"]["Top"] for b in row) for row in rows]
+        self.assertEqual(tops, sorted(tops))
+
+    def test_merged_lines(self):
+        rows, _, _ = group_blocks(PAKNSAVE_20260824)
+        self.assertEqual(_lines(rows), PAKNSAVE_20260824_EXPECTED)
+
+    def test_whittakers_price_orphan_absorbed(self):
+        """$13.18 sits above its breakdown row due to receipt curl — must join 20/$6.59, not WHITTAKERS."""
+        rows, _, _ = group_blocks(PAKNSAVE_20260824)
+        result = _lines(rows)
+        self.assertIn("20  $6.59  $13.18", result)
+        self.assertFalse(any("WHITTAKERS" in l and "$13.18" in l for l in result))
+
+    def test_milk_price_orphan_absorbed(self):
+        """$9.58 sits above its breakdown row due to receipt curl — must join 20/14.79."""
+        rows, _, _ = group_blocks(PAKNSAVE_20260824)
+        result = _lines(rows)
+        self.assertIn("20  14.79  $9.58", result)
+        self.assertFalse(any("STENDARD" in l and "$9.58" in l for l in result))
+
+    def test_stoke_ipa_chains_with_price(self):
+        """STOKE IPA price ($22.99) is 0.3% above the item name — must still chain."""
+        rows, _, _ = group_blocks(PAKNSAVE_20260824)
+        self.assertIn("STOKE IPA 330M 12F) CAN  $22.99", _lines(rows))
+
+
 if __name__ == "__main__":
     unittest.main()
