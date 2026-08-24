@@ -571,8 +571,7 @@ def _verify_price_sum(extracted: dict) -> dict:
         return result
 
     diff = abs(items_sum - total)
-    # Warn if discrepancy > $0.10 AND > 1% of total (tolerates rounding on large receipts)
-    if diff > 0.10 and diff > total * 0.01:
+    if diff >= 0.01:
         result["warning"] = True
         direction = "over" if items_sum > total else "under"
         result["message"] = (

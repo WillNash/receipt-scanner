@@ -375,7 +375,7 @@ def _recheck_prices(items: list, total_str: str) -> dict:
 
     items_sum = round(sum(p for p in (to_float(it.get("price")) for it in items) if p is not None), 2)
     diff = abs(items_sum - total)
-    if diff > 0.10 and diff > total * 0.01:
+    if diff >= 0.01:
         direction = "over" if items_sum > total else "under"
         return {
             "warning": True,
