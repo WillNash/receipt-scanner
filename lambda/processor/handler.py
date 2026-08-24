@@ -1,15 +1,16 @@
 import hashlib
 import json
 import os
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote_plus
 
 import boto3
 
-from dynamo import update_job
+from dynamo import update_job, dyn_s, dyn_n, dyn_bool
 from pricing import check_price_sum
 from constants import VALID_ITEM_CATEGORIES
-from line_items import write_line_items
+from line_items import write_line_items, LineItemContext
 from image_processing import (
     _to_jpeg,
     _compute_skew_angle,
@@ -24,6 +25,20 @@ from bedrock_extraction import (
     _validate_classification,
     _fix_weighted_item_prices,
 )
+
+@dataclass
+class ReceiptAnalysis:
+    store_category: str
+    vendor: str
+    receipt_date: str
+    total: str
+    items: list
+    price_check_warning: bool
+    price_check_message: str
+    debug_s3_key: str
+    textract_debug_s3_key: str
+    cropped_s3_key: str | None = None
+
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
 LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
@@ -81,8 +96,8 @@ def process_record(record):
         created_at = existing_item.get("created_at", {}).get("S", now_iso())
 
         update_job(dynamodb, DYNAMODB_TABLE, job_id, {
-            "status": {"S": "PROCESSING"},
-            "updated_at": {"S": now_iso()},
+            "status": dyn_s("PROCESSING"),
+            "updated_at": dyn_s(now_iso()),
         })
 
         image_data = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
@@ -99,9 +114,9 @@ def process_record(record):
                 print(f"DUPLICATE image_hash={image_hash[:12]}… prior_job={prior_job_id}")
                 s3.delete_object(Bucket=bucket, Key=key)
                 update_job(dynamodb, DYNAMODB_TABLE, job_id, {
-                    "status": {"S": "DUPLICATE"},
-                    "image_hash": {"S": image_hash},
-                    "updated_at": {"S": now_iso()},
+                    "status": dyn_s("DUPLICATE"),
+                    "image_hash": dyn_s(image_hash),
+                    "updated_at": dyn_s(now_iso()),
                 })
                 continue
 
@@ -109,38 +124,36 @@ def process_record(record):
 
         expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
         update_job(dynamodb, DYNAMODB_TABLE, job_id, {
-            "status": {"S": "COMPLETE"},
-            "store_category": {"S": result["store_category"]},
-            "price_check_warning": {"BOOL": result["price_check_warning"]},
-            "price_check_message": {"S": result["price_check_message"]},
-            "vendor": {"S": result["vendor"]},
-            "receipt_date": {"S": result["receipt_date"]},
-            "total": {"S": result["total"]},
-            "items": {"S": json.dumps(result["items"])},
-            "debug_s3_key": {"S": result["debug_s3_key"]},
-            "textract_debug_s3_key": {"S": result["textract_debug_s3_key"]},
-            **( {"cropped_s3_key": {"S": result["cropped_s3_key"]}} if result.get("cropped_s3_key") else {} ),
-            "image_hash": {"S": image_hash},
-            "updated_at": {"S": now_iso()},
-            "expires_at": {"N": str(expiry)},
+            "status": dyn_s("COMPLETE"),
+            "store_category": dyn_s(result.store_category),
+            "price_check_warning": dyn_bool(result.price_check_warning),
+            "price_check_message": dyn_s(result.price_check_message),
+            "vendor": dyn_s(result.vendor),
+            "receipt_date": dyn_s(result.receipt_date),
+            "total": dyn_s(result.total),
+            "items": dyn_s(json.dumps(result.items)),
+            "debug_s3_key": dyn_s(result.debug_s3_key),
+            "textract_debug_s3_key": dyn_s(result.textract_debug_s3_key),
+            **( {"cropped_s3_key": dyn_s(result.cropped_s3_key)} if result.cropped_s3_key else {} ),
+            "image_hash": dyn_s(image_hash),
+            "updated_at": dyn_s(now_iso()),
+            "expires_at": dyn_n(expiry),
         })
 
         store_image_hash(user_id, image_hash, job_id, expiry)
 
         if LINE_ITEMS_TABLE:
-            write_line_items(
-                dynamodb=dynamodb,
-                table_name=LINE_ITEMS_TABLE,
+            ctx = LineItemContext(
                 job_id=job_id,
                 user_id=user_id,
                 user_email=user_email,
                 created_at=created_at,
-                vendor=result["vendor"],
-                receipt_date=result["receipt_date"],
-                store_category=result["store_category"],
-                items=result["items"],
+                vendor=result.vendor,
+                receipt_date=result.receipt_date,
+                store_category=result.store_category,
                 expires_at=expiry,
             )
+            write_line_items(dynamodb, LINE_ITEMS_TABLE, ctx, result.items)
 
 
 def _run_deskew_pipeline(data: bytes, skew_threshold: float) -> tuple[bytes, TextractResult, float | None, float | None, bool]:
@@ -199,7 +212,7 @@ def _save_debug_payloads(
     return claude_debug_key, textract_debug_key
 
 
-def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data: bytes | None = None) -> dict:
+def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data: bytes | None = None) -> ReceiptAnalysis:
     SKEW_THRESHOLD = 1.0  # degrees — below this, noise outweighs benefit
 
     cropped_key = crop_receipt(s3, bucket, key, image_data=image_data)
@@ -215,7 +228,9 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
     extracted, usage = _run_bedrock(tr.text)
 
     _validate_classification(extracted)
-    _fix_weighted_item_prices(extracted.get("items", []))
+    corrections = _fix_weighted_item_prices(extracted.get("items", []))
+    if corrections:
+        print(f"WEIGHTED_PRICE_FIX_TOTAL corrections={corrections}")
     price_check = check_price_sum(extracted.get("items", []), extracted.get("total", ""))
     if price_check["warning"]:
         print(f"PRICE_CHECK_WARNING {price_check}")
@@ -224,18 +239,18 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
         job_id, user_id, tr, skew, correction, deskew_applied, extracted, usage, price_check, SKEW_THRESHOLD,
     )
 
-    return {
-        "store_category": extracted.get("store_category") or "other",
-        "vendor": extracted.get("vendor") or "Unknown vendor",
-        "receipt_date": extracted.get("receipt_date") or "",
-        "total": extracted.get("total") or "",
-        "items": extracted.get("items") or [],
-        "price_check_warning": price_check["warning"],
-        "price_check_message": price_check["message"],
-        "debug_s3_key": claude_debug_key,
-        "textract_debug_s3_key": textract_debug_key,
-        "cropped_s3_key": cropped_key,
-    }
+    return ReceiptAnalysis(
+        store_category=extracted.get("store_category") or "other",
+        vendor=extracted.get("vendor") or "Unknown vendor",
+        receipt_date=extracted.get("receipt_date") or "",
+        total=extracted.get("total") or "",
+        items=extracted.get("items") or [],
+        price_check_warning=price_check["warning"],
+        price_check_message=price_check["message"],
+        debug_s3_key=claude_debug_key,
+        textract_debug_s3_key=textract_debug_key,
+        cropped_s3_key=cropped_key,
+    )
 
 
 def save_debug(job_id: str, user_id: str, payload: dict, suffix: str = "") -> str:
@@ -265,10 +280,10 @@ def store_image_hash(user_id: str, image_hash: str, job_id: str, expires_at: int
     dynamodb.put_item(
         TableName=IMAGE_HASHES_TABLE,
         Item={
-            "user_id":    {"S": user_id},
-            "image_hash": {"S": image_hash},
-            "job_id":     {"S": job_id},
-            "expires_at": {"N": str(expires_at)},
+            "user_id":    dyn_s(user_id),
+            "image_hash": dyn_s(image_hash),
+            "job_id":     dyn_s(job_id),
+            "expires_at": dyn_n(expires_at),
         },
     )
 

@@ -1,3 +1,15 @@
+def dyn_s(v: str) -> dict:
+    return {"S": v}
+
+
+def dyn_n(v) -> dict:
+    return {"N": str(v)}
+
+
+def dyn_bool(v: bool) -> dict:
+    return {"BOOL": bool(v)}
+
+
 def update_job(dynamodb, table_name: str, job_id: str, updates: dict) -> None:
     set_parts = []
     attr_names = {}

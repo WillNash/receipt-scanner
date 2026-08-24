@@ -13,124 +13,132 @@ BEDROCK_MODEL_ID = os.environ.get(
     "BEDROCK_MODEL_ID", "anthropic.claude-3-5-haiku-20241022-v1:0"
 )
 
-# Tool definition — forces structured JSON output from the model
-RECEIPT_TOOL = {
-    "toolSpec": {
-        "name": "extract_receipt",
-        "description": "Extract and classify structured data from a receipt.",
-        "inputSchema": {
-            "json": {
-                "type": "object",
-                "properties": {
-                    "store_category": {
-                        "type": "string",
-                        "description": (
-                            "Type of store. Pick exactly one: "
-                            "grocery | petrol | pharmacy | restaurant | fast_food | cafe | "
-                            "hardware | department_store | clothing | electronics | "
-                            "health_beauty | liquor | other"
-                        ),
-                    },
-                    "vendor": {
-                        "type": "string",
-                        "description": "Store or vendor name",
-                    },
-                    "receipt_date": {
-                        "type": "string",
-                        "description": "Date of purchase as printed on the receipt",
-                    },
-                    "total": {
-                        "type": "string",
-                        "description": "Final total amount paid, without currency symbol, e.g. '42.50'",
-                    },
-                    "items": {
-                        "type": "array",
-                        "description": (
-                            "Every purchased line item. Exclude summary lines "
-                            "such as subtotal, GST, EFTPOS, cash, and change."
-                        ),
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "description": {
-                                    "type": "string",
-                                    "description": (
-                                        "Product name only. "
-                                        "Do not include quantity, unit price, or totals in this field."
-                                    ),
-                                },
-                                "quantity": {
-                                    "type": "string",
-                                    "description": (
-                                        "Pure numeric count or measured weight — no units. "
-                                        "quantity × unit_price must equal price. "
-                                        "Examples: '2' for two units, '1.741' for 1.741 kg of a weight-priced item. "
-                                        "For a fixed-price item like 'PAMS CHEESE BLOCK 1KG' bought once: quantity is '1'."
-                                    ),
-                                },
-                                "package_size": {
-                                    "type": "string",
-                                    "description": (
-                                        "Size or weight label from the product name for fixed-price items "
-                                        "(e.g. '1KG', '500G', '2L', '750ML', '400G'). "
-                                        "Set only when the weight/volume is part of the product's brand name, "
-                                        "not for weight-priced items sold by the kg/g where quantity carries the weight."
-                                    ),
-                                },
-                                "unit_price": {
-                                    "type": "string",
-                                    "description": (
-                                        "Price per single unit without currency symbol. "
-                                        "If the receipt shows '2 @ $1.79', unit_price is '1.79'."
-                                    ),
-                                },
-                                "price": {
-                                    "type": "string",
-                                    "description": (
-                                        "Final line total after any discount, without currency symbol, e.g. '3.00'. "
-                                        "If a discount line follows this item, subtract it here."
-                                    ),
-                                },
-                                "discount": {
-                                    "type": "string",
-                                    "description": (
-                                        "Discount as a negative number without currency symbol. "
-                                        "If the receipt shows a discount line of '-$0.58' for this item, "
-                                        "discount is '-0.58'. Merge it into this item — do not create a separate item for it. "
-                                        "price should equal (quantity * unit_price) + discount."
-                                    ),
-                                },
-                                "item_category": {
-                                    "type": "string",
-                                    "description": (
-                                        "Product category. Pick exactly one: "
-                                        "fruit_veg | dairy | meat_seafood | bakery | deli | frozen | "
-                                        "pantry | snacks | confectionery | beverages | alcohol | "
-                                        "household | personal_care | pet | tobacco | non_food | other. "
-                                        "Use 'other' for generic descriptions like 'Value Pack' or bare SKU codes."
-                                    ),
-                                },
-                                "nova_group": {
-                                    "type": "integer",
-                                    "description": (
-                                        "NOVA food processing group: "
-                                        "1=unprocessed/minimally processed (fresh apple, plain chicken, brown rice), "
-                                        "2=culinary ingredient (olive oil, butter, sugar, plain flour), "
-                                        "3=processed food (canned tuna, block cheese, sourdough loaf, canned tomatoes), "
-                                        "4=ultra-processed (chips, instant noodles, diet cola, flavoured yoghurt, breakfast bars). "
-                                        "Use null for non-food items."
-                                    ),
-                                },
-                            },
-                            "required": ["description"],
-                        },
-                    },
-                },
-                "required": ["store_category", "vendor", "receipt_date", "total", "items"],
-            }
+def _build_receipt_tool() -> dict:
+    item_properties = {
+        "description": {
+            "type": "string",
+            "description": (
+                "Product name only. "
+                "Do not include quantity, unit price, or totals in this field."
+            ),
+        },
+        "quantity": {
+            "type": "string",
+            "description": (
+                "Pure numeric count or measured weight — no units. "
+                "quantity × unit_price must equal price. "
+                "Examples: '2' for two units, '1.741' for 1.741 kg of a weight-priced item. "
+                "For a fixed-price item like 'PAMS CHEESE BLOCK 1KG' bought once: quantity is '1'."
+            ),
+        },
+        "package_size": {
+            "type": "string",
+            "description": (
+                "Size or weight label from the product name for fixed-price items "
+                "(e.g. '1KG', '500G', '2L', '750ML', '400G'). "
+                "Set only when the weight/volume is part of the product's brand name, "
+                "not for weight-priced items sold by the kg/g where quantity carries the weight."
+            ),
+        },
+        "unit_price": {
+            "type": "string",
+            "description": (
+                "Price per single unit without currency symbol. "
+                "If the receipt shows '2 @ $1.79', unit_price is '1.79'."
+            ),
+        },
+        "price": {
+            "type": "string",
+            "description": (
+                "Final line total after any discount, without currency symbol, e.g. '3.00'. "
+                "If a discount line follows this item, subtract it here."
+            ),
+        },
+        "discount": {
+            "type": "string",
+            "description": (
+                "Discount as a negative number without currency symbol. "
+                "If the receipt shows a discount line of '-$0.58' for this item, "
+                "discount is '-0.58'. Merge it into this item — do not create a separate item for it. "
+                "price should equal (quantity * unit_price) + discount."
+            ),
+        },
+        "item_category": {
+            "type": "string",
+            "description": (
+                "Product category. Pick exactly one: "
+                "fruit_veg | dairy | meat_seafood | bakery | deli | frozen | "
+                "pantry | snacks | confectionery | beverages | alcohol | "
+                "household | personal_care | pet | tobacco | non_food | other. "
+                "Use 'other' for generic descriptions like 'Value Pack' or bare SKU codes."
+            ),
+        },
+        "nova_group": {
+            "type": "integer",
+            "description": (
+                "NOVA food processing group: "
+                "1=unprocessed/minimally processed (fresh apple, plain chicken, brown rice), "
+                "2=culinary ingredient (olive oil, butter, sugar, plain flour), "
+                "3=processed food (canned tuna, block cheese, sourdough loaf, canned tomatoes), "
+                "4=ultra-processed (chips, instant noodles, diet cola, flavoured yoghurt, breakfast bars). "
+                "Use null for non-food items."
+            ),
         },
     }
-}
+
+    receipt_properties = {
+        "store_category": {
+            "type": "string",
+            "description": (
+                "Type of store. Pick exactly one: "
+                "grocery | petrol | pharmacy | restaurant | fast_food | cafe | "
+                "hardware | department_store | clothing | electronics | "
+                "health_beauty | liquor | other"
+            ),
+        },
+        "vendor": {
+            "type": "string",
+            "description": "Store or vendor name",
+        },
+        "receipt_date": {
+            "type": "string",
+            "description": "Date of purchase as printed on the receipt",
+        },
+        "total": {
+            "type": "string",
+            "description": "Final total amount paid, without currency symbol, e.g. '42.50'",
+        },
+        "items": {
+            "type": "array",
+            "description": (
+                "Every purchased line item. Exclude summary lines "
+                "such as subtotal, GST, EFTPOS, cash, and change."
+            ),
+            "items": {
+                "type": "object",
+                "properties": item_properties,
+                "required": ["description"],
+            },
+        },
+    }
+
+    return {
+        "toolSpec": {
+            "name": "extract_receipt",
+            "description": "Extract and classify structured data from a receipt.",
+            "inputSchema": {
+                "json": {
+                    "type": "object",
+                    "properties": receipt_properties,
+                    "required": ["store_category", "vendor", "receipt_date", "total", "items"],
+                }
+            },
+        }
+    }
+
+
+# Tool definition — forces structured JSON output from the model
+RECEIPT_TOOL = _build_receipt_tool()
 
 bedrock = None  # injected by handler via set_bedrock_client()
 

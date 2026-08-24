@@ -8,7 +8,7 @@ import boto3
 from botocore.config import Config
 from constants import VALID_ITEM_CATEGORIES
 from dynamo import update_job
-from line_items import write_line_items
+from line_items import write_line_items, LineItemContext
 from pricing import check_price_sum
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
@@ -397,25 +397,18 @@ def _replace_line_items(job_id: str, user_id: str, job_record: dict, created_at:
             )
 
     # Read context fields from the job record
-    vendor       = job_record.get("vendor",         {}).get("S", "")
-    receipt_date = job_record.get("receipt_date",   {}).get("S", "")
-    store_cat    = job_record.get("store_category", {}).get("S", "other")
-    user_email   = job_record.get("email",          {}).get("S", "")
-    expires_at   = int(job_record.get("expires_at", {}).get("N", "0"))
-
-    write_line_items(
-        dynamodb=dynamodb,
-        table_name=LINE_ITEMS_TABLE,
+    ctx = LineItemContext(
         job_id=job_id,
         user_id=user_id,
-        user_email=user_email,
+        user_email=job_record.get("email",          {}).get("S", ""),
         created_at=created_at,
-        vendor=vendor,
-        receipt_date=receipt_date,
-        store_category=store_cat,
-        items=new_items,
-        expires_at=expires_at,
+        vendor=job_record.get("vendor",         {}).get("S", ""),
+        receipt_date=job_record.get("receipt_date",   {}).get("S", ""),
+        store_category=job_record.get("store_category", {}).get("S", "other"),
+        expires_at=int(job_record.get("expires_at", {}).get("N", "0")),
     )
+
+    write_line_items(dynamodb, LINE_ITEMS_TABLE, ctx, new_items)
 
 
 

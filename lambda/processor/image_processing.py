@@ -1,7 +1,29 @@
 import math
+import traceback
 
 import cv2
 import numpy as np
+
+# --- crop_receipt tuning ---
+DETECT_SCALE = 1200
+MIN_GAIN = 0.85
+PAD_FRAC = 0.025
+
+# --- shared bright/contour region thresholds ---
+_BRIGHT_MIN_AREA_FRAC = 0.12
+_BRIGHT_MIN_ASPECT = 0.15
+_BRIGHT_MAX_ASPECT = 5.0
+
+# --- MSER tuning ---
+_MSER_MIN_BBOX = 20
+_MSER_MAX_BBOX = 1500
+_MSER_DELTA = 0.25
+_MSER_MIN_FILL = 0.1
+_MSER_MAX_FILL = 0.9
+_MSER_MIN_ASPECT = 0.15
+_MSER_MAX_ASPECT = 6.0
+_MSER_BAND_THRESHOLD = 0.60
+_MSER_BAND_PAD_FRAC = 0.05
 
 
 def _to_jpeg(data: bytes) -> bytes:
@@ -85,10 +107,6 @@ def _deskew_image(image_bytes: bytes, angle_deg: float) -> bytes:
 
 def crop_receipt(s3, bucket: str, key: str, image_data: bytes | None = None) -> str | None:
     """Crop the receipt from the image using multiple detection methods in priority order."""
-    DETECT_SCALE = 1200
-    MIN_GAIN = 0.85
-    PAD_FRAC = 0.025
-
     try:
         data = image_data if image_data is not None else s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         arr = np.frombuffer(data, dtype=np.uint8)
@@ -141,8 +159,8 @@ def crop_receipt(s3, bucket: str, key: str, image_data: bytes | None = None) -> 
         )
         return cropped_key
 
-    except Exception as exc:
-        print(f"CROP_SKIPPED: {exc}")
+    except Exception:
+        print(f"CROP_SKIPPED (unexpected):\n{traceback.format_exc()}")
         return None
 
 
@@ -170,10 +188,10 @@ def _bright_region(small, sw, sh):
         if not contours:
             continue
         c = max(contours, key=cv2.contourArea)
-        if cv2.contourArea(c) < 0.12 * sw * sh:
+        if cv2.contourArea(c) < _BRIGHT_MIN_AREA_FRAC * sw * sh:
             continue
         x, y, bw, bh = cv2.boundingRect(c)
-        if bh > 0 and 0.15 < bw / bh < 5.0:
+        if bh > 0 and _BRIGHT_MIN_ASPECT < bw / bh < _BRIGHT_MAX_ASPECT:
             return x, y, x + bw, y + bh
     return None
 
@@ -186,19 +204,29 @@ def _edge_contour(small, sw, sh):
     edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=3)
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     for c in sorted(contours, key=cv2.contourArea, reverse=True):
-        if cv2.contourArea(c) < 0.12 * sw * sh:
+        if cv2.contourArea(c) < _BRIGHT_MIN_AREA_FRAC * sw * sh:
             break
         x, y, bw, bh = cv2.boundingRect(c)
-        if bh > 0 and 0.15 < bw / bh < 5.0:
+        if bh > 0 and _BRIGHT_MIN_ASPECT < bw / bh < _BRIGHT_MAX_ASPECT:
             return x, y, x + bw, y + bh
     return None
 
 
+def _dense_band(centres: list, size: int) -> tuple[int, int]:
+    hist, edges = np.histogram(centres, bins=40, range=(0, size))
+    smoothed = np.convolve(hist, np.ones(5) / 5, mode="same")
+    threshold = smoothed.max() * _MSER_BAND_THRESHOLD
+    active = [i for i, s in enumerate(smoothed) if s >= threshold]
+    if not active:
+        return 0, size
+    pad = int(size * _MSER_BAND_PAD_FRAC)
+    return max(0, int(edges[active[0]]) - pad), min(size, int(edges[active[-1] + 1]) + pad)
+
+
 def _mser_density(small, sw, sh):
     """Original MSER text-density approach — last-resort fallback."""
-    MIN_BBOX, MAX_BBOX = 20, 1500
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    mser = cv2.MSER_create(5, MIN_BBOX, MAX_BBOX, 0.25)
+    mser = cv2.MSER_create(5, _MSER_MIN_BBOX, _MSER_MAX_BBOX, _MSER_DELTA)
     regions, _ = mser.detectRegions(gray)
     valid_cx, valid_cy = [], []
     for region in regions:
@@ -207,21 +235,12 @@ def _mser_density(small, sw, sh):
         if rw == 0 or rh == 0:
             continue
         bbox_area = rw * rh
-        if (0.15 < rw/rh < 6.0) and (0.1 < len(region)/bbox_area < 0.9) and (MIN_BBOX < bbox_area < MAX_BBOX):
+        if (_MSER_MIN_ASPECT < rw/rh < _MSER_MAX_ASPECT) and (_MSER_MIN_FILL < len(region)/bbox_area < _MSER_MAX_FILL) and (_MSER_MIN_BBOX < bbox_area < _MSER_MAX_BBOX):
             valid_cx.append(rx + rw / 2)
             valid_cy.append(ry + rh / 2)
     print(f"MSER regions={len(regions)} text-like={len(valid_cx)}")
     if not valid_cx:
         return None
-    def dense_band(centres, size):
-        hist, edges = np.histogram(centres, bins=40, range=(0, size))
-        smoothed = np.convolve(hist, np.ones(5) / 5, mode="same")
-        threshold = smoothed.max() * 0.60
-        active = [i for i, s in enumerate(smoothed) if s >= threshold]
-        if not active:
-            return 0, size
-        pad = int(size * 0.05)
-        return max(0, int(edges[active[0]]) - pad), min(size, int(edges[active[-1] + 1]) + pad)
-    x0, x1 = dense_band(valid_cx, sw)
-    y0, y1 = dense_band(valid_cy, sh)
+    x0, x1 = _dense_band(valid_cx, sw)
+    y0, y1 = _dense_band(valid_cy, sh)
     return x0, y0, x1, y1

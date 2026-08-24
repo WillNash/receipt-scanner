@@ -1,19 +1,26 @@
+from dataclasses import dataclass
+
 from constants import VALID_ITEM_CATEGORIES
 from pricing import to_n
+
+
+@dataclass
+class LineItemContext:
+    job_id: str
+    user_id: str
+    user_email: str
+    created_at: str
+    vendor: str
+    receipt_date: str
+    store_category: str
+    expires_at: int
 
 
 def write_line_items(
     dynamodb,
     table_name: str,
-    job_id: str,
-    user_id: str,
-    user_email: str,
-    created_at: str,
-    vendor: str,
-    receipt_date: str,
-    store_category: str,
+    ctx: LineItemContext,
     items: list,
-    expires_at: int,
 ) -> None:
     """Write per-line-item records to DynamoDB for a completed or edited receipt.
 
@@ -25,21 +32,21 @@ def write_line_items(
         if not description:
             continue
 
-        item_sk = f"{created_at}#{job_id}#{i:03d}"
-        desc_created = f"{description}#{created_at}"
+        item_sk = f"{ctx.created_at}#{ctx.job_id}#{i:03d}"
+        desc_created = f"{description}#{ctx.created_at}"
 
         record: dict = {
-            "user_id":        {"S": user_id},
+            "user_id":        {"S": ctx.user_id},
             "item_sk":        {"S": item_sk},
-            "job_id":         {"S": job_id},
+            "job_id":         {"S": ctx.job_id},
             "description":    {"S": description},
             "desc_created":   {"S": desc_created},
-            "email":          {"S": user_email},
-            "vendor":         {"S": vendor},
-            "receipt_date":   {"S": receipt_date},
-            "store_category": {"S": store_category},
-            "created_at":     {"S": created_at},
-            "expires_at":     {"N": str(expires_at)},
+            "email":          {"S": ctx.user_email},
+            "vendor":         {"S": ctx.vendor},
+            "receipt_date":   {"S": ctx.receipt_date},
+            "store_category": {"S": ctx.store_category},
+            "created_at":     {"S": ctx.created_at},
+            "expires_at":     {"N": str(ctx.expires_at)},
         }
 
         for field in ("quantity", "unit_price", "price", "discount"):
@@ -61,4 +68,4 @@ def write_line_items(
             record["nova_group"] = {"N": str(nova)}
 
         dynamodb.put_item(TableName=table_name, Item=record)
-        print(f"LINE_ITEM_WRITTEN {job_id}#{i:03d} {description!r} [{item_category}]")
+        print(f"LINE_ITEM_WRITTEN {ctx.job_id}#{i:03d} {description!r} [{item_category}]")
