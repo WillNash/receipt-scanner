@@ -6,6 +6,14 @@ def to_float(val) -> float | None:
         return None
 
 
+def to_n(val) -> dict | None:
+    try:
+        cleaned = str(val).replace(",", "").replace("$", "").strip()
+        return {"N": str(float(cleaned))} if cleaned else None
+    except (ValueError, TypeError):
+        return None
+
+
 def check_price_sum(items: list, total_str: str) -> dict:
     """Compare sum of item prices to the receipt total.
 

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 from botocore.config import Config
-from pricing import check_price_sum
+from pricing import check_price_sum, to_n
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
 LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
@@ -368,13 +368,6 @@ def _recheck_prices(items: list, total_str: str) -> dict:
 
 def _replace_line_items(job_id: str, user_id: str, job_record: dict, created_at: str, new_items: list) -> None:
     """Delete all existing line_items for this job then insert the new list."""
-    def to_n(val):
-        try:
-            cleaned = str(val).replace(",", "").replace("$", "").strip()
-            return {"N": str(float(cleaned))} if cleaned else None
-        except (ValueError, TypeError):
-            return None
-
     # Delete existing rows
     if created_at:
         prefix = f"{created_at}#{job_id}#"

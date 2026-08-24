@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from line_grouping import group_blocks
-from pricing import check_price_sum, to_float
+from pricing import check_price_sum, to_float, to_n
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
 LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
@@ -767,13 +767,6 @@ def write_line_items(
 
         item_sk = f"{created_at}#{job_id}#{i:03d}"
         desc_created = f"{description}#{created_at}"
-
-        def to_n(val):
-            try:
-                cleaned = str(val).replace(",", "").replace("$", "").strip()
-                return {"N": str(float(cleaned))} if cleaned else None
-            except (ValueError, TypeError):
-                return None
 
         record: dict = {
             "user_id":        {"S": user_id},
