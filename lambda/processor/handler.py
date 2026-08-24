@@ -423,8 +423,13 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
                             "quantity × unit_price must equal price. "
                             "For multi-unit lines like 'ITEM NAME  $price' followed by '2 @  $1.79', "
                             "set quantity to '2', unit_price to '1.79', price to the line total. "
-                            "For weight-priced lines like '1.741 Kg @  $1.49/Kg', "
-                            "set quantity to '1.741', unit_price to '1.49'. "
+                            "For weight-priced lines like '1.741 Kg @  $1.49/Kg  $2.59', "
+                            "set quantity to '1.741', price to the explicit line total (e.g. '2.59'), "
+                            "and unit_price to price / quantity (e.g. '1.49'). "
+                            "The line total on the right edge is more reliable than the per-kg rate in the middle — "
+                            "OCR errors in the per-kg column are common. "
+                            "If weight × unit_price does not equal the printed total, trust the total and "
+                            "recalculate unit_price = total / weight. "
                             "For fixed-price items whose product name includes a weight/size (e.g. 'PAMS CHEESE BLOCK 1KG'), "
                             "set quantity to '1' (or the count bought), unit_price to the item price, "
                             "and package_size to the size label from the product name (e.g. '1KG'). "
@@ -483,6 +488,7 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
     )
 
     _validate_classification(extracted)
+    _fix_weighted_item_prices(extracted.get("items", []))
     price_check = _verify_price_sum(extracted)
     if price_check["warning"]:
         print(f"PRICE_CHECK_WARNING {price_check}")
@@ -540,6 +546,34 @@ def _to_float(val) -> float | None:
         return float(cleaned) if cleaned else None
     except (ValueError, TypeError):
         return None
+
+
+def _fix_weighted_item_prices(items: list) -> int:
+    """For weight-priced items (non-integer quantity), trust price over unit_price.
+
+    If weight × unit_price ≠ price, recalculate unit_price = price / weight.
+    Returns the number of items corrected.
+    """
+    corrections = 0
+    for item in items:
+        qty = _to_float(item.get("quantity"))
+        unit_price = _to_float(item.get("unit_price"))
+        price = _to_float(item.get("price"))
+        if qty is None or unit_price is None or price is None:
+            continue
+        if qty == 0 or qty % 1 == 0:
+            continue
+        discount = _to_float(item.get("discount")) or 0.0
+        expected = round(qty * unit_price + discount, 2)
+        if abs(expected - price) >= 0.01:
+            corrected = round(price / qty, 2)
+            print(
+                f"WEIGHTED_PRICE_FIX qty={qty} unit_price={unit_price} price={price} "
+                f"expected={expected} corrected_unit_price={corrected}"
+            )
+            item["unit_price"] = str(corrected)
+            corrections += 1
+    return corrections
 
 
 def _verify_price_sum(extracted: dict) -> dict:
