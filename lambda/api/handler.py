@@ -6,8 +6,10 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 from botocore.config import Config
+from constants import VALID_ITEM_CATEGORIES
 from dynamo import update_job
-from pricing import check_price_sum, to_n
+from line_items import write_line_items
+from pricing import check_price_sum
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
 LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
@@ -38,12 +40,6 @@ CORS_HEADERS = {
 VALID_CONTENT_TYPES = {
     "image/jpeg": "jpg",
     "image/png": "png",
-}
-
-VALID_ITEM_CATEGORIES = {
-    "fruit_veg", "dairy", "meat_seafood", "bakery", "deli", "frozen",
-    "pantry", "snacks", "confectionery", "beverages", "alcohol",
-    "household", "personal_care", "pet", "tobacco", "non_food", "other",
 }
 
 # Module-level JWKS cache — populated once per Lambda container (cold start only).
@@ -405,43 +401,21 @@ def _replace_line_items(job_id: str, user_id: str, job_record: dict, created_at:
     receipt_date = job_record.get("receipt_date",   {}).get("S", "")
     store_cat    = job_record.get("store_category", {}).get("S", "other")
     user_email   = job_record.get("email",          {}).get("S", "")
-    expires_at   = job_record.get("expires_at",     {}).get("N", "0")
+    expires_at   = int(job_record.get("expires_at", {}).get("N", "0"))
 
-    for i, new_item in enumerate(new_items):
-        description = str(new_item.get("description") or "").strip()
-        if not description:
-            continue
-        item_sk     = f"{created_at}#{job_id}#{i:03d}"
-        desc_created = f"{description}#{created_at}"
-        record = {
-            "user_id":        {"S": user_id},
-            "item_sk":        {"S": item_sk},
-            "job_id":         {"S": job_id},
-            "description":    {"S": description},
-            "desc_created":   {"S": desc_created},
-            "email":          {"S": user_email},
-            "vendor":         {"S": vendor},
-            "receipt_date":   {"S": receipt_date},
-            "store_category": {"S": store_cat},
-            "created_at":     {"S": created_at},
-            "expires_at":     {"N": str(expires_at)},
-        }
-        for field in ("quantity", "unit_price", "price", "discount"):
-            n = to_n(new_item.get(field))
-            if n:
-                record[field] = n
-        pkg_size = str(new_item.get("package_size") or "").strip()
-        if pkg_size:
-            record["package_size"] = {"S": pkg_size}
-        # Preserve classification fields if present (carried through from original item)
-        item_category = new_item.get("item_category", "other")
-        if item_category not in VALID_ITEM_CATEGORIES:
-            item_category = "other"
-        record["item_category"] = {"S": item_category}
-        nova = new_item.get("nova_group")
-        if isinstance(nova, int) and nova in (1, 2, 3, 4):
-            record["nova_group"] = {"N": str(nova)}
-        dynamodb.put_item(TableName=LINE_ITEMS_TABLE, Item=record)
+    write_line_items(
+        dynamodb=dynamodb,
+        table_name=LINE_ITEMS_TABLE,
+        job_id=job_id,
+        user_id=user_id,
+        user_email=user_email,
+        created_at=created_at,
+        vendor=vendor,
+        receipt_date=receipt_date,
+        store_category=store_cat,
+        items=new_items,
+        expires_at=expires_at,
+    )
 
 
 
