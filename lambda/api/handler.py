@@ -24,6 +24,10 @@ PRIMARY_REGION = os.environ.get("PRIMARY_REGION", "ap-southeast-2")
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 DAILY_UPLOAD_LIMIT = int(os.environ.get("DAILY_UPLOAD_LIMIT", "50"))
 GLOBAL_UPLOAD_LIMIT = int(os.environ.get("GLOBAL_UPLOAD_LIMIT", "100"))
+PRESIGNED_PUT_TTL_SECONDS = 300
+PRESIGNED_GET_TTL_SECONDS = 3600
+JOB_TTL_DAYS = 7
+RECEIPTS_PAGE_SIZE = 20
 
 dynamodb = boto3.client("dynamodb", region_name=PRIMARY_REGION)
 s3 = boto3.client(
@@ -201,7 +205,7 @@ def handle_upload_url(event, user_id: str, user_email: str):
     job_id = str(uuid.uuid4())
     s3_key = f"uploads/{user_id}/{job_id}.{ext}"
     now = now_iso()
-    expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
+    expiry = int((datetime.now(timezone.utc) + timedelta(days=JOB_TTL_DAYS)).timestamp())
 
     dynamodb.put_item(
         TableName=DYNAMODB_TABLE,
@@ -224,7 +228,7 @@ def handle_upload_url(event, user_id: str, user_email: str):
             "Key": s3_key,
             "ContentType": content_type,
         },
-        ExpiresIn=300,
+        ExpiresIn=PRESIGNED_PUT_TTL_SECONDS,
     )
     return make_response(200, {"jobId": job_id, "uploadUrl": upload_url, "s3Key": s3_key})
 
@@ -234,16 +238,13 @@ def handle_list_receipts(user_id: str):
         TableName=DYNAMODB_TABLE,
         IndexName="user-jobs-index",
         KeyConditionExpression="#uid = :uid",
-        ExpressionAttributeNames={"#uid": "user_id"},
-        ExpressionAttributeValues={":uid": dyn_s(user_id)},
+        FilterExpression="#st <> :dup",
+        ExpressionAttributeNames={"#uid": "user_id", "#st": "status"},
+        ExpressionAttributeValues={":uid": dyn_s(user_id), ":dup": dyn_s("DUPLICATE")},
         ScanIndexForward=False,
-        Limit=20,
+        Limit=RECEIPTS_PAGE_SIZE,
     )
-    receipts = [
-        format_receipt(JobRecord.from_dynamo(item))
-        for item in result.get("Items", [])
-        if JobRecord.from_dynamo(item).status != "DUPLICATE"
-    ]
+    receipts = [format_receipt(JobRecord.from_dynamo(item)) for item in result.get("Items", [])]
     return make_response(200, {"receipts": receipts})
 
 
@@ -393,7 +394,7 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
 
         # Recalculate price check so the warning clears once items are corrected
         total_str = job.total or ""
-        pc = _recheck_prices(new_items, total_str)
+        pc = check_price_sum(new_items, total_str)
         updates["price_check_warning"] = dyn_bool(pc["warning"])
         updates["price_check_message"] = dyn_s(pc["message"])
 
@@ -412,10 +413,6 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
         Key={"job_id": dyn_s(job_id)},
     )
     return make_response(200, format_receipt(JobRecord.from_dynamo(refreshed["Item"])))
-
-
-def _recheck_prices(items: list, total_str: str) -> dict:
-    return check_price_sum(items, total_str)
 
 
 def _replace_line_items(job_id: str, user_id: str, job: JobRecord, created_at: str, new_items: list) -> None:
@@ -451,7 +448,7 @@ def format_receipt(job: JobRecord) -> dict:
             "get_object",
             Params={"Bucket": UPLOADS_BUCKET, "Key": key,
                     "ResponseContentDisposition": f"attachment; filename={filename}"},
-            ExpiresIn=3600,
+            ExpiresIn=PRESIGNED_GET_TTL_SECONDS,
         )
 
     debug_url = None
