@@ -41,6 +41,9 @@ class ReceiptJob {
     this.total,
     this.items = const [],
     this.updatedAt,
+    this.storeCategory,
+    this.priceCheckWarning = false,
+    this.priceCheckMessage,
   });
 
   final String jobId;
@@ -51,6 +54,9 @@ class ReceiptJob {
   final String? total;
   final List<LineItem> items;
   final String? updatedAt;
+  final String? storeCategory;
+  final bool priceCheckWarning;
+  final String? priceCheckMessage;
 
   bool get isComplete => status == 'COMPLETE';
   bool get isFailed => status == 'FAILED';
@@ -70,6 +76,9 @@ class ReceiptJob {
           .map((e) => LineItem.fromJson(e as Map<String, dynamic>))
           .toList(),
       updatedAt: json['updatedAt'] as String?,
+      storeCategory: json['storeCategory'] as String?,
+      priceCheckWarning: json['priceCheckWarning'] as bool? ?? false,
+      priceCheckMessage: json['priceCheckMessage'] as String?,
     );
   }
 }

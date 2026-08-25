@@ -27,12 +27,31 @@ class _ReceiptCardState extends State<ReceiptCard> {
           widget.job.vendor ?? 'Unknown vendor',
           style: theme.textTheme.titleMedium,
         ),
-        subtitle: Text(
-          [
-            if (widget.job.receiptDate != null) widget.job.receiptDate!,
-            if (widget.job.total != null) 'Total: ${widget.job.total}',
-          ].join('  ·  '),
-          style: theme.textTheme.bodySmall,
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              [
+                if (widget.job.receiptDate != null) widget.job.receiptDate!,
+                if (widget.job.total != null) 'Total: ${widget.job.total}',
+                if (widget.job.storeCategory != null)
+                  widget.job.storeCategory!.replaceAll('_', ' '),
+              ].join('  ·  '),
+              style: theme.textTheme.bodySmall,
+            ),
+            if (widget.job.priceCheckWarning)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  widget.job.priceCheckMessage?.isNotEmpty == true
+                      ? 'Price check: ${widget.job.priceCheckMessage}'
+                      : 'Price check: item prices do not match total',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.error,
+                  ),
+                ),
+              ),
+          ],
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
