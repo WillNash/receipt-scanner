@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import boto3
 from botocore.config import Config
 from constants import VALID_ITEM_CATEGORIES
-from dynamo import update_job, now_iso
+from dynamo import update_job, now_iso, dyn_s, dyn_n, dyn_bool
 from line_items import write_line_items, LineItemContext
 from pricing import check_price_sum
 
@@ -59,6 +59,23 @@ def get_jwks() -> dict:
     return _jwks_cache
 
 
+def _route(method: str, path: str, user_id: str, user_email: str, event: dict):
+    job_id = (event.get("pathParameters") or {}).get("jobId")
+    body = json.loads(event.get("body") or "{}") if method in ("POST", "PATCH") else {}
+
+    if method == "POST" and path.endswith("/upload-url"):
+        return handle_upload_url(event, user_id, user_email)
+    if method == "GET" and path.endswith("/receipts"):
+        return handle_list_receipts(user_id)
+    if method == "GET" and "/jobs/" in path:
+        return handle_get_job(job_id, user_id)
+    if method == "DELETE" and "/receipts/" in path:
+        return handle_delete_receipt(job_id, user_id)
+    if method == "PATCH" and "/receipts/" in path:
+        return handle_edit_receipt(job_id, user_id, body)
+    return make_response(404, {"error": "Not found"})
+
+
 def lambda_handler(event, context):
     method = event.get("httpMethod", "")
     path = event.get("path", "")
@@ -71,56 +88,30 @@ def lambda_handler(event, context):
     except Exception as exc:
         return make_response(401, {"error": f"Unauthorized: {exc}"})
 
-    if method == "POST" and path.endswith("/upload-url"):
-        return handle_upload_url(event, user_id, user_email)
-    elif method == "GET" and path.endswith("/receipts"):
-        return handle_list_receipts(user_id)
-    elif method == "GET" and "/jobs/" in path:
-        job_id = (event.get("pathParameters") or {}).get("jobId")
-        return handle_get_job(job_id, user_id)
-    elif method == "DELETE" and "/receipts/" in path:
-        job_id = (event.get("pathParameters") or {}).get("jobId")
-        return handle_delete_receipt(job_id, user_id)
-    elif method == "PATCH" and "/receipts/" in path:
-        job_id = (event.get("pathParameters") or {}).get("jobId")
-        body = json.loads(event.get("body") or "{}")
-        return handle_edit_receipt(job_id, user_id, body)
-    else:
-        return make_response(404, {"error": "Not found"})
+    return _route(method, path, user_id, user_email, event)
+
+
+def _check_and_increment_count(counter_key: str, limit: int) -> bool:
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    expiry = int((datetime.now(timezone.utc) + timedelta(days=2)).timestamp())
+    resp = dynamodb.update_item(
+        TableName=DYNAMODB_TABLE,
+        Key={"job_id": dyn_s(counter_key)},
+        UpdateExpression="ADD upload_count :one SET expires_at = if_not_exists(expires_at, :exp)",
+        ExpressionAttributeValues={":one": dyn_n(1), ":exp": dyn_n(expiry)},
+        ReturnValues="UPDATED_NEW",
+    )
+    return int(resp["Attributes"]["upload_count"]["N"]) <= limit
 
 
 def check_and_increment_global_count() -> bool:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    expiry = int((datetime.now(timezone.utc) + timedelta(days=2)).timestamp())
-    resp = dynamodb.update_item(
-        TableName=DYNAMODB_TABLE,
-        Key={"job_id": {"S": f"COUNT#GLOBAL#{today}"}},
-        UpdateExpression="ADD upload_count :one SET expires_at = if_not_exists(expires_at, :exp)",
-        ExpressionAttributeValues={
-            ":one": {"N": "1"},
-            ":exp": {"N": str(expiry)},
-        },
-        ReturnValues="UPDATED_NEW",
-    )
-    count = int(resp["Attributes"]["upload_count"]["N"])
-    return count <= GLOBAL_UPLOAD_LIMIT
+    return _check_and_increment_count(f"COUNT#GLOBAL#{today}", GLOBAL_UPLOAD_LIMIT)
 
 
 def check_and_increment_daily_count(user_id: str) -> bool:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    expiry = int((datetime.now(timezone.utc) + timedelta(days=2)).timestamp())
-    resp = dynamodb.update_item(
-        TableName=DYNAMODB_TABLE,
-        Key={"job_id": {"S": f"COUNT#{user_id}#{today}"}},
-        UpdateExpression="ADD upload_count :one SET expires_at = if_not_exists(expires_at, :exp)",
-        ExpressionAttributeValues={
-            ":one": {"N": "1"},
-            ":exp": {"N": str(expiry)},
-        },
-        ReturnValues="UPDATED_NEW",
-    )
-    count = int(resp["Attributes"]["upload_count"]["N"])
-    return count <= DAILY_UPLOAD_LIMIT
+    return _check_and_increment_count(f"COUNT#{user_id}#{today}", DAILY_UPLOAD_LIMIT)
 
 
 def handle_upload_url(event, user_id: str, user_email: str):
@@ -134,7 +125,7 @@ def handle_upload_url(event, user_id: str, user_email: str):
     if image_hash and IMAGE_HASHES_TABLE:
         resp = dynamodb.get_item(
             TableName=IMAGE_HASHES_TABLE,
-            Key={"user_id": {"S": user_id}, "image_hash": {"S": image_hash}},
+            Key={"user_id": dyn_s(user_id), "image_hash": dyn_s(image_hash)},
         )
         if resp.get("Item"):
             prior_job_id = resp["Item"].get("job_id", {}).get("S", "")
@@ -161,14 +152,14 @@ def handle_upload_url(event, user_id: str, user_email: str):
     dynamodb.put_item(
         TableName=DYNAMODB_TABLE,
         Item={
-            "job_id": {"S": job_id},
-            "user_id": {"S": user_id},
-            "email": {"S": user_email},
-            "s3_key": {"S": s3_key},
-            "status": {"S": "PENDING"},
-            "created_at": {"S": now},
-            "updated_at": {"S": now},
-            "expires_at": {"N": str(expiry)},
+            "job_id": dyn_s(job_id),
+            "user_id": dyn_s(user_id),
+            "email": dyn_s(user_email),
+            "s3_key": dyn_s(s3_key),
+            "status": dyn_s("PENDING"),
+            "created_at": dyn_s(now),
+            "updated_at": dyn_s(now),
+            "expires_at": dyn_n(expiry),
         },
     )
 
@@ -190,7 +181,7 @@ def handle_list_receipts(user_id: str):
         IndexName="user-jobs-index",
         KeyConditionExpression="#uid = :uid",
         ExpressionAttributeNames={"#uid": "user_id"},
-        ExpressionAttributeValues={":uid": {"S": user_id}},
+        ExpressionAttributeValues={":uid": dyn_s(user_id)},
         ScanIndexForward=False,
         Limit=20,
     )
@@ -202,80 +193,87 @@ def handle_list_receipts(user_id: str):
     return make_response(200, {"receipts": receipts})
 
 
-def handle_get_job(job_id: str | None, user_id: str):
+def _fetch_job_item(job_id: str | None, user_id: str):
+    """Fetch the raw DynamoDB job item and enforce ownership.
+
+    Returns the item dict on success, or a make_response error dict on failure.
+    """
     if not job_id:
         return make_response(400, {"error": "jobId required"})
-
     result = dynamodb.get_item(
         TableName=DYNAMODB_TABLE,
-        Key={"job_id": {"S": job_id}},
+        Key={"job_id": dyn_s(job_id)},
     )
     item = result.get("Item")
     if not item:
         return make_response(404, {"error": "Job not found"})
-
     if item.get("user_id", {}).get("S") != user_id:
         return make_response(403, {"error": "Forbidden"})
+    return item
 
+
+def handle_get_job(job_id: str | None, user_id: str):
+    item = _fetch_job_item(job_id, user_id)
+    if "statusCode" in item:
+        return item
     return make_response(200, format_receipt(item))
 
 
-def handle_delete_receipt(job_id: str | None, user_id: str):
-    if not job_id:
-        return make_response(400, {"error": "jobId required"})
-
-    result = dynamodb.get_item(
-        TableName=DYNAMODB_TABLE,
-        Key={"job_id": {"S": job_id}},
+def _delete_line_items_for_job(job_id: str, user_id: str, created_at: str) -> None:
+    """Query and batch-delete all line_items rows for a given job."""
+    prefix = f"{created_at}#{job_id}#"
+    resp = dynamodb.query(
+        TableName=LINE_ITEMS_TABLE,
+        KeyConditionExpression="#uid = :uid AND begins_with(#sk, :prefix)",
+        ExpressionAttributeNames={"#uid": "user_id", "#sk": "item_sk"},
+        ExpressionAttributeValues={
+            ":uid": dyn_s(user_id),
+            ":prefix": dyn_s(prefix),
+        },
+        ProjectionExpression="#uid, #sk",
     )
-    item = result.get("Item")
-    if not item:
-        return make_response(404, {"error": "Job not found"})
-    if item.get("user_id", {}).get("S") != user_id:
-        return make_response(403, {"error": "Forbidden"})
+    keys_to_delete = [
+        {"user_id": it["user_id"], "item_sk": it["item_sk"]}
+        for it in resp.get("Items", [])
+    ]
+    for i in range(0, len(keys_to_delete), 25):
+        chunk = keys_to_delete[i:i + 25]
+        dynamodb.batch_write_item(
+            RequestItems={
+                LINE_ITEMS_TABLE: [
+                    {"DeleteRequest": {"Key": key}} for key in chunk
+                ]
+            }
+        )
+
+
+def handle_delete_receipt(job_id: str | None, user_id: str):
+    item = _fetch_job_item(job_id, user_id)
+    if "statusCode" in item:
+        return item
 
     image_hash = item.get("image_hash", {}).get("S")
     created_at = item.get("created_at", {}).get("S", "")
 
-    # Delete the job record
-    dynamodb.delete_item(
-        TableName=DYNAMODB_TABLE,
-        Key={"job_id": {"S": job_id}},
-    )
-
-    # Delete the dedup hash so the image can be re-uploaded later
+    # Atomically delete the job record and the dedup hash together
+    transact_items = [
+        {"Delete": {"TableName": DYNAMODB_TABLE, "Key": {"job_id": dyn_s(job_id)}}},
+    ]
     if image_hash and IMAGE_HASHES_TABLE:
-        dynamodb.delete_item(
-            TableName=IMAGE_HASHES_TABLE,
-            Key={"user_id": {"S": user_id}, "image_hash": {"S": image_hash}},
-        )
+        transact_items.append({
+            "Delete": {
+                "TableName": IMAGE_HASHES_TABLE,
+                "Key": {"user_id": dyn_s(user_id), "image_hash": dyn_s(image_hash)},
+            }
+        })
+    dynamodb.transact_write_items(TransactItems=transact_items)
 
-    # Delete all line items for this job
+    # Delete all line items for this job (batch — cannot be in a transaction)
     if LINE_ITEMS_TABLE and created_at:
-        prefix = f"{created_at}#{job_id}#"
-        resp = dynamodb.query(
-            TableName=LINE_ITEMS_TABLE,
-            KeyConditionExpression="#uid = :uid AND begins_with(#sk, :prefix)",
-            ExpressionAttributeNames={"#uid": "user_id", "#sk": "item_sk"},
-            ExpressionAttributeValues={
-                ":uid": {"S": user_id},
-                ":prefix": {"S": prefix},
-            },
-            ProjectionExpression="#uid, #sk",
-        )
-        keys_to_delete = [
-            {"user_id": it["user_id"], "item_sk": it["item_sk"]}
-            for it in resp.get("Items", [])
-        ]
-        for i in range(0, len(keys_to_delete), 25):
-            chunk = keys_to_delete[i:i + 25]
-            dynamodb.batch_write_item(
-                RequestItems={
-                    LINE_ITEMS_TABLE: [
-                        {"DeleteRequest": {"Key": key}} for key in chunk
-                    ]
-                }
-            )
+        try:
+            _delete_line_items_for_job(job_id, user_id, created_at)
+        except Exception as exc:
+            print(f"ERROR delete_line_items job={job_id}: {exc} — line items may be orphaned")
 
     return make_response(200, {"deleted": True})
 
@@ -317,40 +315,31 @@ def _validate_edit_body(body: dict) -> str | None:
 
 
 def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
-    if not job_id:
-        return make_response(400, {"error": "jobId required"})
-
     err = _validate_edit_body(body)
     if err:
         return make_response(400, {"error": err})
 
-    result = dynamodb.get_item(
-        TableName=DYNAMODB_TABLE,
-        Key={"job_id": {"S": job_id}},
-    )
-    item = result.get("Item")
-    if not item:
-        return make_response(404, {"error": "Job not found"})
-    if item.get("user_id", {}).get("S") != user_id:
-        return make_response(403, {"error": "Forbidden"})
+    item = _fetch_job_item(job_id, user_id)
+    if "statusCode" in item:
+        return item
 
-    updates = {"updated_at": {"S": now_iso()}}
+    updates = {"updated_at": dyn_s(now_iso())}
 
     if "vendor" in body:
-        updates["vendor"] = {"S": str(body["vendor"])}
+        updates["vendor"] = dyn_s(str(body["vendor"]))
 
     if "receiptDate" in body:
-        updates["receipt_date"] = {"S": str(body["receiptDate"])}
+        updates["receipt_date"] = dyn_s(str(body["receiptDate"]))
 
     new_items = body.get("items")  # full replacement list
     if new_items is not None:
-        updates["items"] = {"S": json.dumps(new_items)}
+        updates["items"] = dyn_s(json.dumps(new_items))
 
         # Recalculate price check so the warning clears once items are corrected
         total_str = item.get("total", {}).get("S", "")
         pc = _recheck_prices(new_items, total_str)
-        updates["price_check_warning"] = {"BOOL": pc["warning"]}
-        updates["price_check_message"] = {"S": pc["message"]}
+        updates["price_check_warning"] = dyn_bool(pc["warning"])
+        updates["price_check_message"] = dyn_s(pc["message"])
 
         if LINE_ITEMS_TABLE:
             created_at = item.get("created_at", {}).get("S", "")
@@ -364,7 +353,7 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
 
     refreshed = dynamodb.get_item(
         TableName=DYNAMODB_TABLE,
-        Key={"job_id": {"S": job_id}},
+        Key={"job_id": dyn_s(job_id)},
     )
     return make_response(200, format_receipt(refreshed["Item"]))
 
@@ -383,8 +372,8 @@ def _replace_line_items(job_id: str, user_id: str, job_record: dict, created_at:
             KeyConditionExpression="#uid = :uid AND begins_with(#sk, :prefix)",
             ExpressionAttributeNames={"#uid": "user_id", "#sk": "item_sk"},
             ExpressionAttributeValues={
-                ":uid": {"S": user_id},
-                ":prefix": {"S": prefix},
+                ":uid": dyn_s(user_id),
+                ":prefix": dyn_s(prefix),
             },
             ProjectionExpression="#uid, #sk",
         )
