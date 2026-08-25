@@ -1,6 +1,5 @@
 <script setup>
 import { ref, inject } from 'vue'
-import heic2any from 'heic2any'
 import { apiErrorMessage } from '../utils.js'
 
 const apiFetch = inject('apiFetch')
@@ -24,6 +23,26 @@ function isHeic(file) {
   )
 }
 
+async function heicToJpeg(file) {
+  let bitmap
+  try {
+    bitmap = await createImageBitmap(file)
+  } catch {
+    throw new Error('HEIC files are not supported in this browser. Use Chrome or Safari, or convert to JPEG first.')
+  }
+  const canvas = document.createElement('canvas')
+  canvas.width = bitmap.width
+  canvas.height = bitmap.height
+  canvas.getContext('2d').drawImage(bitmap, 0, 0)
+  return new Promise((resolve, reject) =>
+    canvas.toBlob(
+      blob => blob ? resolve(blob) : reject(new Error('HEIC canvas export failed')),
+      'image/jpeg',
+      0.92,
+    )
+  )
+}
+
 async function selectFiles(files) {
   error.value = ''
   const fileArray = Array.from(files)
@@ -39,21 +58,11 @@ async function selectFiles(files) {
 
     if (isHeic(file)) {
       try {
-        console.log('heic2any: starting conversion for', file.name, file.size, 'bytes')
-        const timeout = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('heic2any timed out after 30s')), 30_000)
-        )
-        const result = await Promise.race([
-          heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 }),
-          timeout,
-        ])
-        console.log('heic2any: done', result)
-        const blob = Array.isArray(result) ? result[0] : result
+        const blob = await heicToJpeg(file)
         const name = file.name.replace(/\.(heic|heif)$/i, '.jpg')
         f = new File([blob], name, { type: 'image/jpeg' })
       } catch (err) {
-        console.error('heic2any error:', err)
-        errors.push(`${file.name}: HEIC conversion failed — ${err.message}`)
+        errors.push(`${file.name}: ${err.message}`)
         continue
       }
     } else if (!['image/jpeg', 'image/png'].includes(file.type)) {

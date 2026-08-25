@@ -6,11 +6,5 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    rollupOptions: {
-      external: ['heic2any'],
-      output: {
-        globals: { heic2any: 'heic2any' },
-      },
-    },
   },
 })
