@@ -24,6 +24,7 @@ from bedrock_extraction import (
     _run_bedrock,
     _validate_classification,
     _fix_weighted_item_prices,
+    _compute_net_prices,
 )
 
 @dataclass
@@ -224,6 +225,7 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
     corrections = _fix_weighted_item_prices(extracted.get("items", []))
     if corrections:
         print(f"WEIGHTED_PRICE_FIX_TOTAL corrections={corrections}")
+    _compute_net_prices(extracted.get("items", []))
     price_check = check_price_sum(extracted.get("items", []), extracted.get("total", ""))
     if price_check["warning"]:
         print(f"PRICE_CHECK_WARNING {price_check}")

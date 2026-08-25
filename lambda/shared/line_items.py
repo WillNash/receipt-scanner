@@ -49,7 +49,7 @@ def write_line_items(
             "expires_at":     {"N": str(ctx.expires_at)},
         }
 
-        for field in ("quantity", "unit_price", "price", "discount"):
+        for field in ("quantity", "unit_price", "line_total", "price", "discount"):
             n = to_n(item.get(field))
             if n:
                 record[field] = n

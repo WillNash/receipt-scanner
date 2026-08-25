@@ -47,11 +47,13 @@ def _build_receipt_tool() -> dict:
                 "If the receipt shows '2 @ $1.79', unit_price is '1.79'."
             ),
         },
-        "price": {
+        "line_total": {
             "type": "string",
             "description": (
-                "Final line total after any discount, without currency symbol, e.g. '3.00'. "
-                "If a discount line follows this item, subtract it here."
+                "The amount printed at the right edge of this line item, without currency symbol. "
+                "Transcribe it exactly — do not add or subtract the discount. "
+                "For '2 @ $1.79  $3.58', line_total is '3.58'. "
+                "For '1.741 Kg @ $1.49/Kg  $2.59', line_total is '2.59'."
             ),
         },
         "discount": {
@@ -59,8 +61,7 @@ def _build_receipt_tool() -> dict:
             "description": (
                 "Discount as a negative number without currency symbol. "
                 "If the receipt shows a discount line of '-$0.58' for this item, "
-                "discount is '-0.58'. Merge it into this item — do not create a separate item for it. "
-                "price should equal (quantity * unit_price) + discount."
+                "discount is '-0.58'. Merge it into this item — do not create a separate item for it."
             ),
         },
         "item_category": {
@@ -168,22 +169,21 @@ def _run_bedrock(receipt_text: str) -> tuple[dict, dict]:
                             "Return all prices and totals without currency symbols. "
                             "quantity is always a bare number — no units. "
                             "quantity × unit_price must equal price. "
-                            "For multi-unit lines like 'ITEM NAME  $price' followed by '2 @  $1.79', "
-                            "set quantity to '2', unit_price to '1.79', price to the line total. "
+                            "For multi-unit lines like 'ITEM NAME' followed by '2 @  $1.79  $3.58', "
+                            "set quantity to '2', unit_price to '1.79', line_total to '3.58'. "
                             "For weight-priced lines like '1.741 Kg @  $1.49/Kg  $2.59', "
-                            "set quantity to '1.741', price to the explicit line total (e.g. '2.59'), "
-                            "and unit_price to price / quantity (e.g. '1.49'). "
-                            "The line total on the right edge is more reliable than the per-kg rate in the middle — "
-                            "OCR errors in the per-kg column are common. "
-                            "If weight × unit_price does not equal the printed total, trust the total and "
-                            "recalculate unit_price = total / weight. "
+                            "set quantity to '1.741', line_total to '2.59' (the right-edge total), "
+                            "and unit_price to '1.49'. "
+                            "The number at the right edge of the line is line_total — transcribe it exactly. "
+                            "Do not compute line_total; do not add or subtract the discount from it. "
                             "For fixed-price items whose product name includes a weight/size (e.g. 'PAMS CHEESE BLOCK 1KG'), "
                             "set quantity to '1' (or the count bought), unit_price to the item price, "
+                            "line_total to the same as unit_price, "
                             "and package_size to the size label from the product name (e.g. '1KG'). "
                             "A line that contains only a number, an '@' or similar separator, and a price "
                             "(e.g. '3 @ $0.89', '2 @ $1.79 $3.58') is a quantity/unit-price breakdown "
-                            "for the item on the line immediately above — update that item's quantity and "
-                            "unit_price; do NOT create a new item for this line. "
+                            "for the item on the line immediately above — update that item's quantity, "
+                            "unit_price, and line_total; do NOT create a new item for this line. "
                             "OCR often misreads '@' as '!', 'J', 'e', or similar characters — "
                             "treat any line matching the pattern <number> <symbol> <price> as a breakdown line. "
                             "Do not create items for lines that consist only of numbers, symbols, or illegible text "
@@ -191,7 +191,7 @@ def _run_bedrock(receipt_text: str) -> tuple[dict, dict]:
                             "quantity breakdown or skip them entirely. Never invent a product name. "
                             "If a discount appears as a product name repeated with a negative amount (e.g. 'BROCCOLI  -$0.58'), "
                             "merge it into the preceding item for that product: set discount to '-0.58' (negative). "
-                            "price = (quantity * unit_price) + discount. "
+                            "Do not alter line_total when merging a discount. "
                             "Do not create a separate line item for discounts. "
                             "Use an empty string for any field you cannot determine.\n\n"
                             "Classification rules:\n"
@@ -249,28 +249,41 @@ def _validate_classification(extracted: dict) -> None:
 
 
 def _fix_weighted_item_prices(items: list) -> int:
-    """For weight-priced items (non-integer quantity), trust price over unit_price.
+    """For weight-priced items (non-integer quantity), trust line_total over unit_price.
 
-    If weight × unit_price ≠ price, recalculate unit_price = price / weight.
+    If weight × unit_price ≠ line_total, recalculate unit_price = line_total / weight.
     Returns the number of items corrected.
     """
     corrections = 0
     for item in items:
         qty = to_float(item.get("quantity"))
         unit_price = to_float(item.get("unit_price"))
-        price = to_float(item.get("price"))
-        if qty is None or unit_price is None or price is None:
+        line_total = to_float(item.get("line_total"))
+        if qty is None or unit_price is None or line_total is None:
             continue
         if qty == 0 or qty % 1 == 0:
             continue
-        discount = to_float(item.get("discount")) or 0.0
-        expected = round(qty * unit_price + discount, 2)
-        if abs(expected - price) >= 0.01:
-            corrected = round(price / qty, 2)
+        expected = round(qty * unit_price, 2)
+        if abs(expected - line_total) >= 0.01:
+            corrected = round(line_total / qty, 2)
             print(
-                f"WEIGHTED_PRICE_FIX qty={qty} unit_price={unit_price} price={price} "
+                f"WEIGHTED_PRICE_FIX qty={qty} unit_price={unit_price} line_total={line_total} "
                 f"expected={expected} corrected_unit_price={corrected}"
             )
             item["unit_price"] = str(corrected)
             corrections += 1
     return corrections
+
+
+def _compute_net_prices(items: list) -> None:
+    """Set price = line_total + discount for every item, in-place.
+
+    price is the net amount the customer pays. line_total is what is printed on
+    the receipt before any discount. Both are stored; price is used for totalling.
+    """
+    for item in items:
+        line_total = to_float(item.get("line_total"))
+        if line_total is None:
+            continue
+        discount = to_float(item.get("discount")) or 0.0
+        item["price"] = str(round(line_total + discount, 2))
