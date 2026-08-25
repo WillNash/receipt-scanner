@@ -168,10 +168,10 @@ def lambda_handler(event, context):
         return exc.response
 
 
-def _check_and_increment_rate_limits(user_id: str) -> dict | None:
+def _check_and_increment_rate_limits(user_id: str) -> None:
     """Atomically increment both rate-limit counters only if both are under their limit.
 
-    Returns a 429 make_response dict if either limit is exceeded, else None.
+    Raises _HttpError(429) if either limit is exceeded.
     Using TransactWriteItems ensures the daily counter is never burned by a global reject.
     """
     now = datetime.now(timezone.utc)
@@ -193,17 +193,16 @@ def _check_and_increment_rate_limits(user_id: str) -> dict | None:
             _update(f"COUNT#{user_id}#{today}", DAILY_UPLOAD_LIMIT),
             _update(f"COUNT#GLOBAL#{today}", GLOBAL_UPLOAD_LIMIT),
         ])
-        return None
     except ClientError as exc:
         if exc.response["Error"]["Code"] != "TransactionCanceledException":
             raise
         reasons = exc.response.get("CancellationReasons", [{}, {}])
         if reasons[1].get("Code") == "ConditionalCheckFailed":
-            return make_response(429, {
+            raise _HttpError(429, {
                 "error": "Today's global upload limit has been reached. Try again tomorrow.",
                 "limitType": "global",
             })
-        return make_response(429, {
+        raise _HttpError(429, {
             "error": f"You've reached your daily limit of {DAILY_UPLOAD_LIMIT} uploads. Try again tomorrow.",
             "limitType": "user",
         })
@@ -226,9 +225,7 @@ def handle_upload_url(event, user_id: str, user_email: str):
             prior_job_id = resp["Item"].get("job_id", {}).get("S", "")
             return make_response(409, {"error": "duplicate", "jobId": prior_job_id})
 
-    rate_err = _check_and_increment_rate_limits(user_id)
-    if rate_err:
-        return rate_err
+    _check_and_increment_rate_limits(user_id)
 
     ext = VALID_CONTENT_TYPES[content_type]
     job_id = str(uuid.uuid4())

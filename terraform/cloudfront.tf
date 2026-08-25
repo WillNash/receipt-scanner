@@ -9,7 +9,7 @@ resource "aws_cloudfront_response_headers_policy" "security" {
       override                   = true
     }
     content_security_policy {
-      content_security_policy = "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; connect-src 'self' https://*.amazonaws.com https://*.amazoncognito.com; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
+      content_security_policy = "default-src 'self'; connect-src 'self' https://*.amazonaws.com https://*.amazoncognito.com; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
       override                = true
     }
     content_type_options {
