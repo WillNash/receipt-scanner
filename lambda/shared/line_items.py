@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from constants import VALID_ITEM_CATEGORIES
 from pricing import to_n
 
+_BATCH_SIZE = 25  # DynamoDB batch_write_item hard limit
+
 
 @dataclass
 class LineItemContext:
@@ -27,6 +29,7 @@ def write_line_items(
     Skips items with no description. Clamps item_category to 'other' when the
     value is absent or not in VALID_ITEM_CATEGORIES.
     """
+    records = []
     for i, item in enumerate(items):
         description = str(item.get("description") or "").strip()
         if not description:
@@ -67,5 +70,26 @@ def write_line_items(
         if isinstance(nova, int) and nova in (1, 2, 3, 4):
             record["nova_group"] = {"N": str(nova)}
 
-        dynamodb.put_item(TableName=table_name, Item=record)
-        print(f"LINE_ITEM_WRITTEN {ctx.job_id}#{i:03d} {description!r} [{item_category}]")
+        records.append(record)
+
+    if not records:
+        return
+
+    _batch_put(dynamodb, table_name, records)
+    print(f"LINE_ITEMS_WRITTEN job={ctx.job_id} count={len(records)}")
+
+
+def _batch_put(dynamodb, table_name: str, records: list) -> None:
+    """Write records in batches of 25, retrying any UnprocessedItems."""
+    for i in range(0, len(records), _BATCH_SIZE):
+        pending = records[i:i + _BATCH_SIZE]
+        while pending:
+            resp = dynamodb.batch_write_item(
+                RequestItems={
+                    table_name: [{"PutRequest": {"Item": r}} for r in pending]
+                }
+            )
+            pending = [
+                req["PutRequest"]["Item"]
+                for req in resp.get("UnprocessedItems", {}).get(table_name, [])
+            ]
