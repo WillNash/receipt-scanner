@@ -74,13 +74,21 @@ def write_env_file(outputs: dict) -> None:
 
 
 def build_frontend() -> None:
-    """Run `npm run build` inside the frontend directory."""
+    """Install npm dependencies (if needed) then build."""
+    import shutil
+    if not shutil.which("npm"):
+        print("ERROR: npm not found. Install Node.js 20+ then re-run.", file=sys.stderr)
+        print("  Ubuntu/Debian: curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs", file=sys.stderr)
+        print("  macOS:         brew install node", file=sys.stderr)
+        sys.exit(1)
+
+    node_modules = os.path.join(FRONTEND_DIR, "node_modules")
+    if not os.path.isdir(node_modules):
+        print("Installing frontend dependencies…")
+        subprocess.run(["npm", "install"], cwd=FRONTEND_DIR, check=True)
+
     print("Building frontend…")
-    subprocess.run(
-        ["npm", "run", "build"],
-        cwd=FRONTEND_DIR,
-        check=True,
-    )
+    subprocess.run(["npm", "run", "build"], cwd=FRONTEND_DIR, check=True)
     print(f"Frontend built → {DIST_DIR}")
 
 
