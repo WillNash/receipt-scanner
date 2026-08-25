@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -44,8 +43,8 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
     final newUploads = <PhotoUpload>[];
 
     for (final file in files) {
-      final bytes = await file.readAsBytes();
-      if (bytes.length > AppConfig.maxFileSizeBytes) {
+      final size = await file.length();
+      if (size > AppConfig.maxFileSizeBytes) {
         tooBig.add(file.name);
         continue;
       }
@@ -69,8 +68,8 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
     final savedPath = '${dir.path}/receipt_$ts.jpg';
     await File(file.path).copy(savedPath);
 
-    final bytes = await File(savedPath).readAsBytes();
-    if (bytes.length > AppConfig.maxFileSizeBytes) {
+    final size = await File(savedPath).length();
+    if (size > AppConfig.maxFileSizeBytes) {
       _warnOversized(['receipt_$ts.jpg']);
       return;
     }
@@ -81,8 +80,6 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
     ];
   }
 
-  Future<List<File>> getSavedCaptures() => _fileRepo.listSavedCaptures();
-
   Future<void> addSavedCaptures(List<File> files) async {
     final tooBig = <String>[];
     final newUploads = <PhotoUpload>[];
@@ -90,8 +87,8 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
 
     for (final file in files) {
       if (currentPaths.contains(file.path)) continue;
-      final bytes = await file.readAsBytes();
-      if (bytes.length > AppConfig.maxFileSizeBytes) {
+      final size = await file.length();
+      if (size > AppConfig.maxFileSizeBytes) {
         tooBig.add(file.uri.pathSegments.last);
         continue;
       }
@@ -137,7 +134,7 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
 
       _update(id, (u) => u.copyWith(jobId: jobId));
 
-      await _service.uploadToS3(uploadUrl, Uint8List.fromList(bytes), contentType);
+      await _service.uploadToS3(uploadUrl, bytes, contentType);
 
       _update(id, (u) => u.copyWith(status: UploadStatus.processing));
 

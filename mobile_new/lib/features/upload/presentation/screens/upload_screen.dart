@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/storage/capture_file_repository.dart';
 import '../../data/models/upload_job.dart';
 import '../view_models/upload_view_model.dart';
 
@@ -64,7 +65,7 @@ class UploadScreen extends ConsumerWidget {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (_) => _SavedCapturesPicker(notifier: notifier),
+      builder: (_) => const _SavedCapturesPicker(),
     );
     if (selected != null && selected.isNotEmpty) {
       await notifier.addSavedCaptures(selected);
@@ -188,15 +189,15 @@ class _TrayButton extends StatelessWidget {
   }
 }
 
-class _SavedCapturesPicker extends StatefulWidget {
-  const _SavedCapturesPicker({required this.notifier});
-  final UploadNotifier notifier;
+class _SavedCapturesPicker extends ConsumerStatefulWidget {
+  const _SavedCapturesPicker();
 
   @override
-  State<_SavedCapturesPicker> createState() => _SavedCapturesPickerState();
+  ConsumerState<_SavedCapturesPicker> createState() =>
+      _SavedCapturesPickerState();
 }
 
-class _SavedCapturesPickerState extends State<_SavedCapturesPicker> {
+class _SavedCapturesPickerState extends ConsumerState<_SavedCapturesPicker> {
   List<File>? _files;
   final Set<String> _selected = {};
 
@@ -207,7 +208,8 @@ class _SavedCapturesPickerState extends State<_SavedCapturesPicker> {
   }
 
   Future<void> _load() async {
-    final files = await widget.notifier.getSavedCaptures();
+    final files =
+        await ref.read(captureFileRepositoryProvider).listSavedCaptures();
     if (mounted) setState(() => _files = files);
   }
 

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../data/models/receipt.dart';
 
-class ReceiptCard extends StatelessWidget {
+class ReceiptCard extends StatefulWidget {
   const ReceiptCard({super.key, required this.job, this.onDelete, this.onEdit});
 
   final ReceiptJob job;
@@ -10,19 +10,27 @@ class ReceiptCard extends StatelessWidget {
   final VoidCallback? onEdit;
 
   @override
+  State<ReceiptCard> createState() => _ReceiptCardState();
+}
+
+class _ReceiptCardState extends State<ReceiptCard> {
+  bool _isExpanded = false;
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Card(
       child: ExpansionTile(
         tilePadding: const EdgeInsets.only(left: 16, right: 4, top: 4, bottom: 4),
+        onExpansionChanged: (v) => setState(() => _isExpanded = v),
         title: Text(
-          job.vendor ?? 'Unknown vendor',
+          widget.job.vendor ?? 'Unknown vendor',
           style: theme.textTheme.titleMedium,
         ),
         subtitle: Text(
           [
-            if (job.receiptDate != null) job.receiptDate!,
-            if (job.total != null) 'Total: ${job.total}',
+            if (widget.job.receiptDate != null) widget.job.receiptDate!,
+            if (widget.job.total != null) 'Total: ${widget.job.total}',
           ].join('  ·  '),
           style: theme.textTheme.bodySmall,
         ),
@@ -33,20 +41,24 @@ class ReceiptCard extends StatelessWidget {
               icon: Icon(Icons.delete_outline,
                   size: 20, color: theme.colorScheme.error),
               tooltip: 'Delete',
-              onPressed: onDelete,
+              onPressed: widget.onDelete,
             ),
-            const Icon(Icons.expand_more, size: 20),
+            AnimatedRotation(
+              turns: _isExpanded ? 0.5 : 0,
+              duration: const Duration(milliseconds: 200),
+              child: const Icon(Icons.expand_more, size: 20),
+            ),
             const SizedBox(width: 4),
           ],
         ),
         children: [
-          if (job.items.isEmpty)
+          if (widget.job.items.isEmpty)
             const Padding(
               padding: EdgeInsets.all(16),
               child: Text('No line items extracted.'),
             )
           else
-            _ItemsTable(items: job.items),
+            _ItemsTable(items: widget.job.items),
           Padding(
             padding: const EdgeInsets.only(left: 8, right: 8, bottom: 8),
             child: Align(
@@ -54,7 +66,7 @@ class ReceiptCard extends StatelessWidget {
               child: TextButton.icon(
                 icon: const Icon(Icons.edit_outlined, size: 16),
                 label: const Text('Edit'),
-                onPressed: onEdit,
+                onPressed: widget.onEdit,
               ),
             ),
           ),
@@ -62,7 +74,6 @@ class ReceiptCard extends StatelessWidget {
       ),
     );
   }
-
 }
 
 class _ItemsTable extends StatelessWidget {
