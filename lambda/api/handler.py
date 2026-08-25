@@ -98,6 +98,12 @@ class JobRecord:
         )
 
 
+class _HttpError(Exception):
+    """Raised by helpers to short-circuit a handler with an HTTP error response."""
+    def __init__(self, status: int, body: dict):
+        self.response = make_response(status, body)
+
+
 _JWKS_TTL_SECONDS = 3600  # re-fetch at most once per hour
 
 
@@ -156,7 +162,10 @@ def lambda_handler(event, context):
     except Exception as exc:
         return make_response(401, {"error": f"Unauthorized: {exc}"})
 
-    return _route(method, path, user_id, user_email, event)
+    try:
+        return _route(method, path, user_id, user_email, event)
+    except _HttpError as exc:
+        return exc.response
 
 
 def _check_and_increment_rate_limits(user_id: str, today: str) -> dict | None:
@@ -282,29 +291,27 @@ def handle_list_receipts(user_id: str):
     return make_response(200, {"receipts": receipts})
 
 
-def _fetch_job_item(job_id: str | None, user_id: str):
+def _fetch_job_item(job_id: str | None, user_id: str) -> dict:
     """Fetch the raw DynamoDB job item and enforce ownership.
 
-    Returns the item dict on success, or a make_response error dict on failure.
+    Raises _HttpError on validation failure, not-found, or ownership mismatch.
     """
     if not job_id:
-        return make_response(400, {"error": "jobId required"})
+        raise _HttpError(400, {"error": "jobId required"})
     result = dynamodb.get_item(
         TableName=DYNAMODB_TABLE,
         Key={"job_id": dyn_s(job_id)},
     )
     item = result.get("Item")
     if not item:
-        return make_response(404, {"error": "Job not found"})
+        raise _HttpError(404, {"error": "Job not found"})
     if item.get("user_id", {}).get("S") != user_id:
-        return make_response(403, {"error": "Forbidden"})
+        raise _HttpError(403, {"error": "Forbidden"})
     return item
 
 
 def handle_get_job(job_id: str | None, user_id: str):
     item = _fetch_job_item(job_id, user_id)
-    if "statusCode" in item:
-        return item
     job = JobRecord.from_dynamo(item)
     return make_response(200, format_receipt(job))
 
@@ -339,8 +346,6 @@ def _delete_line_items_for_job(job_id: str, user_id: str, created_at: str) -> No
 
 def handle_delete_receipt(job_id: str | None, user_id: str):
     item = _fetch_job_item(job_id, user_id)
-    if "statusCode" in item:
-        return item
     job = JobRecord.from_dynamo(item)
 
     image_hash = job.image_hash
@@ -421,8 +426,6 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
         return make_response(400, {"error": err})
 
     item = _fetch_job_item(job_id, user_id)
-    if "statusCode" in item:
-        return item
     job = JobRecord.from_dynamo(item)
 
     updates = {"updated_at": dyn_s(now_iso())}
