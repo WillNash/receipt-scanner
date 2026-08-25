@@ -1,11 +1,14 @@
 import json
 import os
+import re
 import urllib.request
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import boto3
 from botocore.config import Config
+from jose import jwt
 from constants import VALID_ITEM_CATEGORIES
 from dynamo import update_job, now_iso, dyn_s, dyn_n, dyn_bool
 from line_items import write_line_items, LineItemContext
@@ -42,21 +45,72 @@ VALID_CONTENT_TYPES = {
     "image/png": "png",
 }
 
+
+@dataclass
+class JobRecord:
+    job_id: str
+    user_id: str
+    email: str
+    status: str
+    created_at: str
+    updated_at: str | None
+    vendor: str | None
+    receipt_date: str | None
+    total: str | None
+    items_json: str
+    store_category: str | None
+    price_check_warning: bool
+    price_check_message: str | None
+    debug_s3_key: str | None
+    textract_debug_s3_key: str | None
+    cropped_s3_key: str | None
+    image_hash: str | None
+    expires_at: int
+    s3_key: str | None
+
+    @classmethod
+    def from_dynamo(cls, item: dict) -> "JobRecord":
+        return cls(
+            job_id=item["job_id"]["S"],
+            user_id=item.get("user_id", {}).get("S", ""),
+            email=item.get("email", {}).get("S", ""),
+            status=item.get("status", {}).get("S", "UNKNOWN"),
+            created_at=item.get("created_at", {}).get("S", ""),
+            updated_at=item.get("updated_at", {}).get("S"),
+            vendor=item.get("vendor", {}).get("S"),
+            receipt_date=item.get("receipt_date", {}).get("S"),
+            total=item.get("total", {}).get("S"),
+            items_json=item.get("items", {}).get("S", "[]"),
+            store_category=item.get("store_category", {}).get("S"),
+            price_check_warning=item.get("price_check_warning", {}).get("BOOL", False),
+            price_check_message=item.get("price_check_message", {}).get("S"),
+            debug_s3_key=item.get("debug_s3_key", {}).get("S"),
+            textract_debug_s3_key=item.get("textract_debug_s3_key", {}).get("S"),
+            cropped_s3_key=item.get("cropped_s3_key", {}).get("S"),
+            image_hash=item.get("image_hash", {}).get("S"),
+            expires_at=int(item.get("expires_at", {}).get("N", "0")),
+            s3_key=item.get("s3_key", {}).get("S"),
+        )
+
+
+class _JwksCache:
+    def __init__(self):
+        self._data: dict | None = None
+
+    def get(self) -> dict:
+        if self._data is None:
+            url = (
+                f"https://cognito-idp.{PRIMARY_REGION}.amazonaws.com"
+                f"/{COGNITO_POOL_ID}/.well-known/jwks.json"
+            )
+            with urllib.request.urlopen(url) as resp:
+                self._data = json.loads(resp.read())
+        return self._data
+
+
 # Module-level JWKS cache — populated once per Lambda container (cold start only).
 # Warm invocations reuse _jwks_cache and skip the Cognito network fetch.
-_jwks_cache = None
-
-
-def get_jwks() -> dict:
-    global _jwks_cache
-    if _jwks_cache is None:
-        jwks_url = (
-            f"https://cognito-idp.{PRIMARY_REGION}.amazonaws.com"
-            f"/{COGNITO_POOL_ID}/.well-known/jwks.json"
-        )
-        with urllib.request.urlopen(jwks_url) as resp:
-            _jwks_cache = json.loads(resp.read())
-    return _jwks_cache
+_jwks_cache = _JwksCache()
 
 
 def _route(method: str, path: str, user_id: str, user_email: str, event: dict):
@@ -186,9 +240,9 @@ def handle_list_receipts(user_id: str):
         Limit=20,
     )
     receipts = [
-        format_receipt(item)
+        format_receipt(JobRecord.from_dynamo(item))
         for item in result.get("Items", [])
-        if item.get("status", {}).get("S") != "DUPLICATE"
+        if JobRecord.from_dynamo(item).status != "DUPLICATE"
     ]
     return make_response(200, {"receipts": receipts})
 
@@ -216,7 +270,8 @@ def handle_get_job(job_id: str | None, user_id: str):
     item = _fetch_job_item(job_id, user_id)
     if "statusCode" in item:
         return item
-    return make_response(200, format_receipt(item))
+    job = JobRecord.from_dynamo(item)
+    return make_response(200, format_receipt(job))
 
 
 def _delete_line_items_for_job(job_id: str, user_id: str, created_at: str) -> None:
@@ -251,9 +306,10 @@ def handle_delete_receipt(job_id: str | None, user_id: str):
     item = _fetch_job_item(job_id, user_id)
     if "statusCode" in item:
         return item
+    job = JobRecord.from_dynamo(item)
 
-    image_hash = item.get("image_hash", {}).get("S")
-    created_at = item.get("created_at", {}).get("S", "")
+    image_hash = job.image_hash
+    created_at = job.created_at
 
     # Atomically delete the job record and the dedup hash together
     transact_items = [
@@ -288,7 +344,6 @@ def _validate_edit_body(body: dict) -> str | None:
         d = body["receiptDate"]
         if not isinstance(d, str) or len(d) > 20:
             return "receiptDate must be a string of at most 20 characters"
-        import re
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
             return "receiptDate must be in YYYY-MM-DD format"
     if "items" in body:
@@ -322,6 +377,7 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
     item = _fetch_job_item(job_id, user_id)
     if "statusCode" in item:
         return item
+    job = JobRecord.from_dynamo(item)
 
     updates = {"updated_at": dyn_s(now_iso())}
 
@@ -336,15 +392,15 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
         updates["items"] = dyn_s(json.dumps(new_items))
 
         # Recalculate price check so the warning clears once items are corrected
-        total_str = item.get("total", {}).get("S", "")
+        total_str = job.total or ""
         pc = _recheck_prices(new_items, total_str)
         updates["price_check_warning"] = dyn_bool(pc["warning"])
         updates["price_check_message"] = dyn_s(pc["message"])
 
         if LINE_ITEMS_TABLE:
-            created_at = item.get("created_at", {}).get("S", "")
+            created_at = job.created_at
             try:
-                _replace_line_items(job_id, user_id, item, created_at, new_items)
+                _replace_line_items(job_id, user_id, job, created_at, new_items)
             except Exception as exc:
                 print(f"ERROR _replace_line_items job={job_id}: {exc}")
                 return make_response(500, {"error": "Failed to update line items"})
@@ -355,60 +411,40 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
         TableName=DYNAMODB_TABLE,
         Key={"job_id": dyn_s(job_id)},
     )
-    return make_response(200, format_receipt(refreshed["Item"]))
+    return make_response(200, format_receipt(JobRecord.from_dynamo(refreshed["Item"])))
 
 
 def _recheck_prices(items: list, total_str: str) -> dict:
     return check_price_sum(items, total_str)
 
 
-def _replace_line_items(job_id: str, user_id: str, job_record: dict, created_at: str, new_items: list) -> None:
+def _replace_line_items(job_id: str, user_id: str, job: JobRecord, created_at: str, new_items: list) -> None:
     """Delete all existing line_items for this job then insert the new list."""
     # Delete existing rows
     if created_at:
-        prefix = f"{created_at}#{job_id}#"
-        resp = dynamodb.query(
-            TableName=LINE_ITEMS_TABLE,
-            KeyConditionExpression="#uid = :uid AND begins_with(#sk, :prefix)",
-            ExpressionAttributeNames={"#uid": "user_id", "#sk": "item_sk"},
-            ExpressionAttributeValues={
-                ":uid": dyn_s(user_id),
-                ":prefix": dyn_s(prefix),
-            },
-            ProjectionExpression="#uid, #sk",
-        )
-        keys = [{"user_id": it["user_id"], "item_sk": it["item_sk"]} for it in resp.get("Items", [])]
-        for i in range(0, len(keys), 25):
-            dynamodb.batch_write_item(
-                RequestItems={
-                    LINE_ITEMS_TABLE: [{"DeleteRequest": {"Key": k}} for k in keys[i:i + 25]]
-                }
-            )
+        _delete_line_items_for_job(job_id, user_id, created_at)
 
     # Read context fields from the job record
     ctx = LineItemContext(
         job_id=job_id,
         user_id=user_id,
-        user_email=job_record.get("email",          {}).get("S", ""),
+        user_email=job.email,
         created_at=created_at,
-        vendor=job_record.get("vendor",         {}).get("S", ""),
-        receipt_date=job_record.get("receipt_date",   {}).get("S", ""),
-        store_category=job_record.get("store_category", {}).get("S", "other"),
-        expires_at=int(job_record.get("expires_at", {}).get("N", "0")),
+        vendor=job.vendor or "",
+        receipt_date=job.receipt_date or "",
+        store_category=job.store_category or "other",
+        expires_at=job.expires_at,
     )
 
     write_line_items(dynamodb, LINE_ITEMS_TABLE, ctx, new_items)
 
 
 
-def format_receipt(item: dict) -> dict:
-    items_raw = item.get("items", {}).get("S", "[]")
+def format_receipt(job: JobRecord) -> dict:
     try:
-        line_items = json.loads(items_raw)
+        line_items = json.loads(job.items_json)
     except (json.JSONDecodeError, TypeError):
         line_items = []
-
-    job_id = item["job_id"]["S"]
 
     def presign(key, filename):
         return s3.generate_presigned_url(
@@ -419,45 +455,37 @@ def format_receipt(item: dict) -> dict:
         )
 
     debug_url = None
-    debug_key = item.get("debug_s3_key", {}).get("S")
-    if debug_key:
-        debug_url = presign(debug_key, f"claude_{job_id}.json")
+    if job.debug_s3_key:
+        debug_url = presign(job.debug_s3_key, f"claude_{job.job_id}.json")
 
     textract_debug_url = None
-    textract_debug_key = item.get("textract_debug_s3_key", {}).get("S")
-    if textract_debug_key:
-        textract_debug_url = presign(textract_debug_key, f"textract_{job_id}.json")
+    if job.textract_debug_s3_key:
+        textract_debug_url = presign(job.textract_debug_s3_key, f"textract_{job.job_id}.json")
 
     cropped_image_url = None
-    cropped_key = item.get("cropped_s3_key", {}).get("S")
-    if cropped_key:
-        cropped_image_url = presign(cropped_key, f"cropped_{job_id}.jpg")
-
-    price_check_warning = item.get("price_check_warning", {}).get("BOOL", False)
-    price_check_message = item.get("price_check_message", {}).get("S")
+    if job.cropped_s3_key:
+        cropped_image_url = presign(job.cropped_s3_key, f"cropped_{job.job_id}.jpg")
 
     return {
-        "jobId": job_id,
-        "status": item.get("status", {}).get("S", "UNKNOWN"),
-        "storeCategory": item.get("store_category", {}).get("S"),
-        "vendor": item.get("vendor", {}).get("S"),
-        "receiptDate": item.get("receipt_date", {}).get("S"),
-        "total": item.get("total", {}).get("S"),
+        "jobId": job.job_id,
+        "status": job.status,
+        "storeCategory": job.store_category,
+        "vendor": job.vendor,
+        "receiptDate": job.receipt_date,
+        "total": job.total,
         "items": line_items,
-        "priceCheckWarning": price_check_warning,
-        "priceCheckMessage": price_check_message,
+        "priceCheckWarning": job.price_check_warning,
+        "priceCheckMessage": job.price_check_message,
         "debugUrl": debug_url,
         "textractDebugUrl": textract_debug_url,
         "croppedImageUrl": cropped_image_url,
-        "createdAt": item.get("created_at", {}).get("S"),
-        "updatedAt": item.get("updated_at", {}).get("S"),
+        "createdAt": job.created_at,
+        "updatedAt": job.updated_at,
     }
 
 
 def get_user_id(event) -> tuple[str, str]:
     """Validate the Cognito JWT and return (sub, email)."""
-    from jose import jwt
-
     headers = event.get("headers") or {}
     # HTTP/2 canonicalises headers to lowercase — check both forms
     auth_header = headers.get("Authorization") or headers.get("authorization", "")
@@ -465,7 +493,7 @@ def get_user_id(event) -> tuple[str, str]:
         raise ValueError("Missing Bearer token")
     token = auth_header[7:]
 
-    jwks = get_jwks()
+    jwks = _jwks_cache.get()
     claims = jwt.decode(
         token,
         jwks,
