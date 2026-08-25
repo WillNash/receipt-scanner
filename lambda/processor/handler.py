@@ -1,7 +1,7 @@
 import hashlib
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote_plus
 
@@ -9,7 +9,6 @@ import boto3
 
 from dynamo import update_job, get_job, now_iso, dyn_s, dyn_n, dyn_bool
 from pricing import check_price_sum
-from constants import VALID_ITEM_CATEGORIES
 from line_items import write_line_items, LineItemContext
 from image_processing import (
     _to_jpeg,

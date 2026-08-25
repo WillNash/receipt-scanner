@@ -10,7 +10,6 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from jose import jwt
-from constants import VALID_ITEM_CATEGORIES
 from dynamo import update_job, now_iso, dyn_s, dyn_n, dyn_bool
 from line_items import write_line_items, LineItemContext
 from pricing import check_price_sum
