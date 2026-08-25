@@ -69,23 +69,24 @@ function onDropZoneKeydown(e) {
   }
 }
 
-async function pollUntilDone(jobId, signal, count = 0) {
-  if (signal && signal.aborted) return { jobId, status: 'CANCELLED' }
-  if (count >= MAX_POLLS) return { jobId, status: 'FAILED', reason: 'timeout' }
-  try {
-    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/jobs/${jobId}`, { signal })
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    const job = await resp.json()
-    if (job.status === 'COMPLETE' || job.status === 'FAILED' || job.status === 'DUPLICATE') return job
-  } catch (err) {
-    if (err.name === 'AbortError') return { jobId, status: 'CANCELLED' }
-    console.error(`Poll error for ${jobId}:`, err)
+async function pollUntilDone(jobId, signal) {
+  for (let count = 0; count < MAX_POLLS; count++) {
+    if (signal && signal.aborted) return { jobId, status: 'CANCELLED' }
+    try {
+      const resp = await apiFetch(`${CONFIG.apiBaseUrl}/jobs/${jobId}`, { signal })
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      const job = await resp.json()
+      if (job.status === 'COMPLETE' || job.status === 'FAILED' || job.status === 'DUPLICATE') return job
+    } catch (err) {
+      if (err.name === 'AbortError') return { jobId, status: 'CANCELLED' }
+      console.error(`Poll error for ${jobId}:`, err)
+    }
+    await new Promise(res => {
+      const t = setTimeout(res, POLL_INTERVAL_MS)
+      if (signal) signal.addEventListener('abort', () => { clearTimeout(t); res() }, { once: true })
+    })
   }
-  await new Promise(res => {
-    const t = setTimeout(res, POLL_INTERVAL_MS)
-    if (signal) signal.addEventListener('abort', () => { clearTimeout(t); res() }, { once: true })
-  })
-  return pollUntilDone(jobId, signal, count + 1)
+  return { jobId, status: 'FAILED', reason: 'timeout' }
 }
 
 async function handleUpload() {
