@@ -1,4 +1,3 @@
-import io
 import math
 import traceback
 
@@ -28,18 +27,9 @@ _MSER_BAND_PAD_FRAC = 0.05
 
 
 def _to_jpeg(data: bytes) -> bytes:
-    """Ensure image bytes are JPEG — handles HEIC/HEIF via pillow-heif, others via cv2."""
+    """Ensure image bytes are JPEG — converts other formats via cv2."""
     if data[:2] == b"\xff\xd8":
         return data
-    if len(data) >= 12 and data[4:8] == b"ftyp":
-        import pillow_heif
-        from PIL import Image
-        pillow_heif.register_heif_opener()
-        img = Image.open(io.BytesIO(data)).convert("RGB")
-        out = io.BytesIO()
-        img.save(out, format="JPEG", quality=92)
-        print(f"HEIC_CONVERTED {len(data)//1024}KB → {out.tell()//1024}KB")
-        return out.getvalue()
     arr = np.frombuffer(data, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:

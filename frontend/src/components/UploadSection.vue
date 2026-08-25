@@ -13,40 +13,28 @@ const POLL_INTERVAL_MS = 3000
 
 const selectedFiles = ref([])
 const error = ref('')
-const dropSub = ref('JPEG, PNG, or HEIC · up to 20 MB each')
+const dropSub = ref('JPEG or PNG · up to 20 MB each')
 const isDragOver = ref(false)
-
-function isHeic(file) {
-  return (
-    ['image/heic', 'image/heif'].includes(file.type) ||
-    /\.(heic|heif)$/i.test(file.name)
-  )
-}
 
 async function selectFiles(files) {
   error.value = ''
   const fileArray = Array.from(files)
   const errors = []
   for (const file of fileArray) {
-    let f = file
-
-    if (!isHeic(file) && !['image/jpeg', 'image/png'].includes(file.type)) {
-      errors.push(`${file.name}: only JPEG, PNG, and HEIC are supported.`)
+    if (!['image/jpeg', 'image/png'].includes(file.type)) {
+      errors.push(`${file.name}: only JPEG and PNG are supported.`)
       continue
     }
-
-    if (f.size > MAX_FILE_BYTES) {
-      errors.push(`${f.name} exceeds 20 MB.`)
+    if (file.size > MAX_FILE_BYTES) {
+      errors.push(`${file.name} exceeds 20 MB.`)
       continue
     }
-    if (selectedFiles.value.find(s => s.name === f.name && s.size === f.size)) {
-      errors.push(`${f.name} is already in the queue.`)
+    if (selectedFiles.value.find(s => s.name === file.name && s.size === file.size)) {
+      errors.push(`${file.name} is already in the queue.`)
     } else {
-      selectedFiles.value.push(f)
+      selectedFiles.value.push(file)
     }
   }
-
-  dropSub.value = 'JPEG, PNG, or HEIC · up to 20 MB each'
   if (errors.length) {
     error.value = errors.length === 1 ? errors[0] : errors.join('\n')
   }
@@ -192,7 +180,7 @@ async function handleUpload() {
         <input
           id="file-input-vue"
           type="file"
-          accept="image/jpeg,image/png,image/heic,image/heif,.heic,.heif"
+          accept="image/jpeg,image/png"
           multiple
           style="display:none"
           @change="onFileInputChange"
