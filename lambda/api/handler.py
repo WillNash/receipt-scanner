@@ -98,23 +98,32 @@ class JobRecord:
         )
 
 
+_JWKS_TTL_SECONDS = 3600  # re-fetch at most once per hour
+
+
 class _JwksCache:
     def __init__(self):
         self._data: dict | None = None
+        self._fetched_at: datetime | None = None
 
     def get(self) -> dict:
-        if self._data is None:
+        now = datetime.now(timezone.utc)
+        if self._data is None or (
+            self._fetched_at is not None
+            and (now - self._fetched_at).total_seconds() > _JWKS_TTL_SECONDS
+        ):
             url = (
                 f"https://cognito-idp.{PRIMARY_REGION}.amazonaws.com"
                 f"/{COGNITO_POOL_ID}/.well-known/jwks.json"
             )
             with urllib.request.urlopen(url) as resp:
                 self._data = json.loads(resp.read())
+            self._fetched_at = now
         return self._data
 
 
-# Module-level JWKS cache — populated once per Lambda container (cold start only).
-# Warm invocations reuse _jwks_cache and skip the Cognito network fetch.
+# Module-level JWKS cache — refreshed at most once per hour so key rotation
+# is picked up without requiring a cold start.
 _jwks_cache = _JwksCache()
 
 
