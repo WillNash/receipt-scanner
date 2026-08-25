@@ -56,6 +56,10 @@ class Authenticated extends AuthState {
 // ---------------------------------------------------------------------------
 
 class AuthNotifier extends Notifier<AuthState> {
+  // Non-null while a token refresh is in flight. Concurrent callers await the
+  // same Future rather than each firing their own refresh against Cognito.
+  Future<String?>? _refreshFuture;
+
   @override
   AuthState build() {
     Future.microtask(_init);
@@ -99,13 +103,19 @@ class AuthNotifier extends Notifier<AuthState> {
   Future<String?> getIdToken() async {
     final current = state;
     if (current is! Authenticated) return null;
+    if (!current.tokens.isExpired) return current.tokens.idToken;
 
+    _refreshFuture ??= _doRefresh(current)
+        .whenComplete(() => _refreshFuture = null);
+    return _refreshFuture;
+  }
+
+  Future<String?> _doRefresh(Authenticated current) async {
     final refreshed = await _repo.refreshIfNeeded(current.tokens);
     if (refreshed == null) {
       state = const Unauthenticated();
       return null;
     }
-
     if (!identical(refreshed, current.tokens)) {
       state = Authenticated(tokens: refreshed, email: current.email);
     }
