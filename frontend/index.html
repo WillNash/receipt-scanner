@@ -4,69 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Receipt Scanner</title>
-  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div id="app">
-    <header>
-      <h1>Receipt Scanner</h1>
-      <button id="logout-btn" class="btn btn-secondary" style="display:none">Sign out</button>
-    </header>
-
-    <main>
-      <!-- Upload section -->
-      <section id="upload-section">
-        <div
-          id="drop-zone"
-          class="drop-zone"
-          tabindex="0"
-          aria-label="Drop receipt images here or click to select"
-        >
-          <div class="drop-zone-inner">
-            <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
-            </svg>
-            <p class="drop-hint">Drop receipt images here</p>
-            <p class="drop-sub" id="drop-sub">JPEG, PNG, or HEIC · up to 20 MB each</p>
-            <label class="btn btn-primary" for="file-input">Choose files</label>
-            <input type="file" id="file-input" accept="image/jpeg,image/png,image/heic,image/heif,.heic,.heif" multiple style="display:none" />
-          </div>
-        </div>
-
-        <ul id="file-queue" class="file-queue" style="display:none"></ul>
-
-        <div id="scan-controls" class="scan-controls" style="display:none">
-          <button id="scan-btn" class="btn btn-primary">Scan receipts</button>
-          <button id="clear-btn" class="btn btn-secondary">Clear</button>
-        </div>
-
-        <p id="upload-error" class="error-text" style="display:none"></p>
-      </section>
-
-      <!-- Status section (shown while uploading / processing) -->
-      <section id="status-section" style="display:none">
-        <div class="status-card" tabindex="-1">
-          <div class="spinner"></div>
-          <p id="status-text" class="status-text" aria-live="polite" aria-atomic="true">Uploading…</p>
-          <button id="cancel-scan-btn" class="btn btn-secondary">Cancel</button>
-        </div>
-      </section>
-
-      <!-- Results section (shown after scan completes) -->
-      <section id="results-section" style="display:none">
-        <div id="results-list" tabindex="-1"></div>
-        <button id="scan-another-btn" class="btn btn-primary" style="margin-top:1.25rem">Scan more receipts</button>
-      </section>
-
-      <!-- History section (always visible when receipts exist) -->
-      <section id="history-section" style="display:none">
-        <h2 class="section-title">Recent receipts</h2>
-        <div id="history-list"></div>
-      </section>
-    </main>
-  </div>
-
-  <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js" integrity="sha384-OTofQ0MEeiSgh62havBcemCIK0gqj809wX6UA0uPISNMRnR6NZyCdGzX3SbLrgwL" crossorigin="anonymous"></script>
-  <script src="app.js"></script>
+  <div id="app"></div>
+  <script type="module" src="/src/main.js"></script>
 </body>
 </html>
