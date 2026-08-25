@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -15,6 +16,10 @@ final _uploadServiceProvider = Provider<UploadService>(
   (ref) => UploadService(ref.watch(apiClientProvider)),
 );
 
+/// Holds filenames that were skipped due to exceeding the size limit.
+/// Cleared by the UI after display via [ref.listen].
+final oversizedWarningsProvider = StateProvider<List<String>>((ref) => []);
+
 final uploadProvider =
     NotifierProvider<UploadNotifier, List<PhotoUpload>>(UploadNotifier.new);
 
@@ -24,6 +29,11 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
 
   UploadService get _service => ref.read(_uploadServiceProvider);
   CaptureFileRepository get _fileRepo => ref.read(captureFileRepositoryProvider);
+
+  void _warnOversized(List<String> names) {
+    if (names.isEmpty) return;
+    ref.read(oversizedWarningsProvider.notifier).update((s) => [...s, ...names]);
+  }
 
   Future<void> pickPhotos() async {
     final picker = ImagePicker();
@@ -46,10 +56,7 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
     }
 
     state = [...state, ...newUploads];
-
-    if (tooBig.isNotEmpty) {
-      _oversizedFiles = tooBig;
-    }
+    _warnOversized(tooBig);
   }
 
   Future<void> takePhoto() async {
@@ -64,7 +71,7 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
 
     final bytes = await File(savedPath).readAsBytes();
     if (bytes.length > AppConfig.maxFileSizeBytes) {
-      _oversizedFiles = ['receipt_$ts.jpg'];
+      _warnOversized(['receipt_$ts.jpg']);
       return;
     }
 
@@ -95,15 +102,7 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
     }
 
     state = [...state, ...newUploads];
-    if (tooBig.isNotEmpty) _oversizedFiles = [..._oversizedFiles, ...tooBig];
-  }
-
-  List<String> _oversizedFiles = [];
-
-  List<String> consumeOversizedWarnings() {
-    final list = _oversizedFiles;
-    _oversizedFiles = [];
-    return list;
+    _warnOversized(tooBig);
   }
 
   void remove(String id) {
@@ -116,9 +115,7 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
 
   Future<void> uploadAll() async {
     final pending = state.where((u) => u.status == UploadStatus.idle).toList();
-    for (final upload in pending) {
-      await _uploadOne(upload.id);
-    }
+    await Future.wait(pending.map((u) => _uploadOne(u.id)));
   }
 
   Future<void> _uploadOne(String id) async {
@@ -129,7 +126,9 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
       final contentType = UploadService.contentTypeFor(filePath);
 
       final bytes = await File(filePath).readAsBytes();
-      final imageHash = sha256.convert(bytes).toString();
+      final imageHash = await Isolate.run(
+        () => sha256.convert(bytes).toString(),
+      );
 
       final (:jobId, :uploadUrl) = await _service.requestUploadUrl(
         contentType,

@@ -16,6 +16,16 @@ class UploadScreen extends ConsumerWidget {
     final hasIdle = uploads.any((u) => u.status == UploadStatus.idle);
     final hasDone = uploads.any((u) => u.isDone);
 
+    ref.listen<List<String>>(oversizedWarningsProvider, (_, warnings) {
+      if (warnings.isEmpty) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${warnings.length} file(s) skipped — over 20 MB limit.'),
+        ),
+      );
+      ref.read(oversizedWarningsProvider.notifier).state = [];
+    });
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Upload'),
@@ -40,29 +50,12 @@ class UploadScreen extends ConsumerWidget {
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       floatingActionButton: _BottomActions(
         hasIdle: hasIdle,
-        onCamera: () async {
-          await notifier.takePhoto();
-          _consumeWarnings(context, notifier);
-        },
-        onGallery: () async {
-          await notifier.pickPhotos();
-          _consumeWarnings(context, notifier);
-        },
+        onCamera: () => notifier.takePhoto(),
+        onGallery: () => notifier.pickPhotos(),
         onSaved: () => _showSavedCapturesPicker(context, notifier),
         onUpload: notifier.uploadAll,
       ),
     );
-  }
-
-  void _consumeWarnings(BuildContext context, UploadNotifier notifier) {
-    final warnings = notifier.consumeOversizedWarnings();
-    if (warnings.isNotEmpty && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${warnings.length} file(s) skipped — over 20 MB limit.'),
-        ),
-      );
-    }
   }
 
   Future<void> _showSavedCapturesPicker(
@@ -75,7 +68,6 @@ class UploadScreen extends ConsumerWidget {
     );
     if (selected != null && selected.isNotEmpty) {
       await notifier.addSavedCaptures(selected);
-      if (context.mounted) _consumeWarnings(context, notifier);
     }
   }
 }
