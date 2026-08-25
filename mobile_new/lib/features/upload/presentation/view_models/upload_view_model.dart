@@ -36,7 +36,7 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
 
   Future<void> pickPhotos() async {
     final picker = ImagePicker();
-    final files = await picker.pickMultiImage(imageQuality: 90);
+    final files = await picker.pickMultiImage(imageQuality: 100);
     if (files.isEmpty) return;
 
     final tooBig = <String>[];
@@ -60,7 +60,7 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
 
   Future<void> takePhoto() async {
     final picker = ImagePicker();
-    final file = await picker.pickImage(source: ImageSource.camera, imageQuality: 90);
+    final file = await picker.pickImage(source: ImageSource.camera, imageQuality: 100);
     if (file == null) return;
 
     final dir = await _fileRepo.getSavedDir();
