@@ -23,49 +23,14 @@ function isHeic(file) {
   )
 }
 
-async function heicToJpeg(file) {
-  let bitmap
-  try {
-    bitmap = await createImageBitmap(file)
-  } catch {
-    throw new Error('HEIC files are not supported in this browser. Use Chrome or Safari, or convert to JPEG first.')
-  }
-  const canvas = document.createElement('canvas')
-  canvas.width = bitmap.width
-  canvas.height = bitmap.height
-  canvas.getContext('2d').drawImage(bitmap, 0, 0)
-  return new Promise((resolve, reject) =>
-    canvas.toBlob(
-      blob => blob ? resolve(blob) : reject(new Error('HEIC canvas export failed')),
-      'image/jpeg',
-      0.92,
-    )
-  )
-}
-
 async function selectFiles(files) {
   error.value = ''
   const fileArray = Array.from(files)
   const errors = []
-  const heicCount = fileArray.filter(isHeic).length
-
-  if (heicCount > 0) {
-    dropSub.value = `Converting ${heicCount} HEIC file${heicCount > 1 ? 's' : ''}…`
-  }
-
   for (const file of fileArray) {
     let f = file
 
-    if (isHeic(file)) {
-      try {
-        const blob = await heicToJpeg(file)
-        const name = file.name.replace(/\.(heic|heif)$/i, '.jpg')
-        f = new File([blob], name, { type: 'image/jpeg' })
-      } catch (err) {
-        errors.push(`${file.name}: ${err.message}`)
-        continue
-      }
-    } else if (!['image/jpeg', 'image/png'].includes(file.type)) {
+    if (!isHeic(file) && !['image/jpeg', 'image/png'].includes(file.type)) {
       errors.push(`${file.name}: only JPEG, PNG, and HEIC are supported.`)
       continue
     }
