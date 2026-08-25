@@ -168,13 +168,15 @@ def lambda_handler(event, context):
         return exc.response
 
 
-def _check_and_increment_rate_limits(user_id: str, today: str) -> dict | None:
+def _check_and_increment_rate_limits(user_id: str) -> dict | None:
     """Atomically increment both rate-limit counters only if both are under their limit.
 
     Returns a 429 make_response dict if either limit is exceeded, else None.
     Using TransactWriteItems ensures the daily counter is never burned by a global reject.
     """
-    expiry = int((datetime.now(timezone.utc) + timedelta(days=2)).timestamp())
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    expiry = int((now + timedelta(days=2)).timestamp())
     _update = lambda key, limit: {  # noqa: E731
         "Update": {
             "TableName": DYNAMODB_TABLE,
@@ -224,8 +226,7 @@ def handle_upload_url(event, user_id: str, user_email: str):
             prior_job_id = resp["Item"].get("job_id", {}).get("S", "")
             return make_response(409, {"error": "duplicate", "jobId": prior_job_id})
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    rate_err = _check_and_increment_rate_limits(user_id, today)
+    rate_err = _check_and_increment_rate_limits(user_id)
     if rate_err:
         return rate_err
 
