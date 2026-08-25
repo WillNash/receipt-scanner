@@ -273,7 +273,7 @@ def handle_list_receipts(user_id: str):
             kwargs["ExclusiveStartKey"] = last_key
         result = dynamodb.query(**kwargs)
         for item in result.get("Items", []):
-            receipts.append(format_receipt(JobRecord.from_dynamo(item)))
+            receipts.append(format_receipt(JobRecord.from_dynamo(item), include_urls=False))
             if len(receipts) >= RECEIPTS_PAGE_SIZE:
                 break
         last_key = result.get("LastEvaluatedKey")
@@ -482,31 +482,30 @@ def _replace_line_items(job_id: str, user_id: str, job: JobRecord, created_at: s
 
 
 
-def format_receipt(job: JobRecord) -> dict:
+def format_receipt(job: JobRecord, include_urls: bool = True) -> dict:
     try:
         line_items = json.loads(job.items_json)
     except (json.JSONDecodeError, TypeError):
         line_items = []
 
-    def presign(key, filename):
-        return s3.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": UPLOADS_BUCKET, "Key": key,
-                    "ResponseContentDisposition": f"attachment; filename={filename}"},
-            ExpiresIn=PRESIGNED_GET_TTL_SECONDS,
-        )
-
     debug_url = None
-    if job.debug_s3_key:
-        debug_url = presign(job.debug_s3_key, f"claude_{job.job_id}.json")
-
     textract_debug_url = None
-    if job.textract_debug_s3_key:
-        textract_debug_url = presign(job.textract_debug_s3_key, f"textract_{job.job_id}.json")
-
     cropped_image_url = None
-    if job.cropped_s3_key:
-        cropped_image_url = presign(job.cropped_s3_key, f"cropped_{job.job_id}.jpg")
+
+    if include_urls:
+        def presign(key, filename):
+            return s3.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": UPLOADS_BUCKET, "Key": key,
+                        "ResponseContentDisposition": f"attachment; filename={filename}"},
+                ExpiresIn=PRESIGNED_GET_TTL_SECONDS,
+            )
+        if job.debug_s3_key:
+            debug_url = presign(job.debug_s3_key, f"claude_{job.job_id}.json")
+        if job.textract_debug_s3_key:
+            textract_debug_url = presign(job.textract_debug_s3_key, f"textract_{job.job_id}.json")
+        if job.cropped_s3_key:
+            cropped_image_url = presign(job.cropped_s3_key, f"cropped_{job.job_id}.jpg")
 
     return {
         "jobId": job.job_id,
@@ -521,6 +520,7 @@ def format_receipt(job: JobRecord) -> dict:
         "debugUrl": debug_url,
         "textractDebugUrl": textract_debug_url,
         "croppedImageUrl": cropped_image_url,
+        "hasCroppedImage": job.cropped_s3_key is not None,
         "createdAt": job.created_at,
         "updatedAt": job.updated_at,
     }

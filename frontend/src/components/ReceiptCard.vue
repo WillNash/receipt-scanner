@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, inject } from 'vue'
 import { formatDate } from '../utils.js'
 import OcrDebugPanel from './OcrDebugPanel.vue'
 
@@ -16,7 +16,20 @@ const props = defineProps({
 
 const emit = defineEmits(['edit'])
 
+const apiFetch = inject('apiFetch', null)
+const CONFIG = inject('CONFIG', null)
+
 const showDebug = ref(false)
+
+// URLs may be absent from list responses — load them lazily on first action click.
+const loadedUrls = ref({
+  debugUrl: props.job.debugUrl ?? null,
+  textractDebugUrl: props.job.textractDebugUrl ?? null,
+  croppedImageUrl: props.job.croppedImageUrl ?? null,
+})
+const urlsFetched = ref(
+  !!(props.job.debugUrl || props.job.textractDebugUrl || props.job.croppedImageUrl)
+)
 
 const items = computed(() => (Array.isArray(props.job.items) ? props.job.items : []))
 const hasDiscount = computed(() => items.value.some(it => it.discount))
@@ -26,7 +39,45 @@ const categoryLabel = computed(() => {
   return props.job.storeCategory.replace(/_/g, ' ')
 })
 
-function toggleDebug() {
+// Action bar visible for all COMPLETE jobs — no longer gated on URL presence.
+const canShowActions = computed(() =>
+  props.showActions && props.job.status === 'COMPLETE'
+)
+
+// Cropped image may be known from a boolean flag (list) or from the URL itself (single-job).
+const hasCropped = computed(() =>
+  !!(loadedUrls.value.croppedImageUrl || props.job.hasCroppedImage)
+)
+
+async function fetchUrls() {
+  if (urlsFetched.value || !apiFetch || !CONFIG) return
+  try {
+    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/jobs/${props.job.jobId}`)
+    if (!resp.ok) return
+    const data = await resp.json()
+    loadedUrls.value = {
+      debugUrl: data.debugUrl ?? null,
+      textractDebugUrl: data.textractDebugUrl ?? null,
+      croppedImageUrl: data.croppedImageUrl ?? null,
+    }
+    urlsFetched.value = true
+  } catch (e) {
+    console.error('Failed to fetch job URLs:', e)
+  }
+}
+
+async function openCroppedImage() {
+  await fetchUrls()
+  if (loadedUrls.value.croppedImageUrl) window.open(loadedUrls.value.croppedImageUrl, '_blank')
+}
+
+async function openDebugJson() {
+  await fetchUrls()
+  if (loadedUrls.value.debugUrl) window.open(loadedUrls.value.debugUrl, '_blank')
+}
+
+async function toggleDebug() {
+  if (!showDebug.value) await fetchUrls()
   showDebug.value = !showDebug.value
 }
 </script>
@@ -85,24 +136,24 @@ function toggleDebug() {
       </tbody>
     </table>
 
-    <!-- Action bar: cropped image, OCR debug, AI extraction JSON, Edit -->
-    <template v-if="showActions && (job.textractDebugUrl || job.debugUrl || job.croppedImageUrl)">
+    <!-- Action bar: URLs are loaded lazily from GET /jobs/{jobId} on first click -->
+    <template v-if="canShowActions">
       <div class="action-bar">
-        <a v-if="job.croppedImageUrl" :href="job.croppedImageUrl" class="btn btn-secondary action-btn">
+        <button v-if="hasCropped" class="btn btn-secondary action-btn" @click="openCroppedImage">
           Cropped image
-        </a>
-        <button v-if="job.textractDebugUrl" class="btn btn-secondary action-btn" @click="toggleDebug">
+        </button>
+        <button class="btn btn-secondary action-btn" @click="toggleDebug">
           {{ showDebug ? 'Hide OCR' : 'OCR debug' }}
         </button>
-        <a v-if="job.debugUrl" :href="job.debugUrl" class="btn btn-secondary action-btn">
+        <button class="btn btn-secondary action-btn" @click="openDebugJson">
           AI extraction JSON
-        </a>
+        </button>
       </div>
     </template>
 
     <OcrDebugPanel
-      v-if="showActions && showDebug && job.textractDebugUrl"
-      :url="job.textractDebugUrl"
+      v-if="canShowActions && showDebug && loadedUrls.textractDebugUrl"
+      :url="loadedUrls.textractDebugUrl"
       :job-id="job.jobId"
     />
 
