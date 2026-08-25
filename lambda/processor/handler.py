@@ -83,71 +83,89 @@ def process_record(record):
         parts = key.split("/")
         job_id = parts[2].rsplit(".", 1)[0] if len(parts) >= 3 else key
 
-        existing = get_job(dynamodb, DYNAMODB_TABLE, job_id)
-        if existing and existing["status"] == "COMPLETE":
-            print(f"Job {job_id} already COMPLETE — skipping")
-            continue
+        try:
+            _process_s3_record(bucket, key, job_id)
+        except Exception:
+            _mark_job_failed(job_id)
+            raise
 
-        user_id = (existing or {}).get("user_id") or "unknown"
-        user_email = (existing or {}).get("email") or ""
-        created_at = (existing or {}).get("created_at") or now_iso()
 
+def _mark_job_failed(job_id: str) -> None:
+    try:
         update_job(dynamodb, DYNAMODB_TABLE, job_id, {
-            "status": dyn_s("PROCESSING"),
+            "status": dyn_s("FAILED"),
             "updated_at": dyn_s(now_iso()),
         })
+    except Exception as exc:
+        print(f"ERROR marking job {job_id} as FAILED: {exc}")
 
-        image_data = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
-        image_hash = hashlib.sha256(image_data).hexdigest()
 
-        prior_job_id = lookup_image_hash(user_id, image_hash)
-        if prior_job_id:
-            prior = get_job(dynamodb, DYNAMODB_TABLE, prior_job_id)
-            prior_status = prior["status"] if prior else None
-            if prior_status == "COMPLETE":
-                print(f"DUPLICATE image_hash={image_hash[:12]}… prior_job={prior_job_id}")
-                s3.delete_object(Bucket=bucket, Key=key)
-                update_job(dynamodb, DYNAMODB_TABLE, job_id, {
-                    "status": dyn_s("DUPLICATE"),
-                    "image_hash": dyn_s(image_hash),
-                    "updated_at": dyn_s(now_iso()),
-                })
-                continue
+def _process_s3_record(bucket: str, key: str, job_id: str) -> None:
+    existing = get_job(dynamodb, DYNAMODB_TABLE, job_id)
+    if existing and existing["status"] == "COMPLETE":
+        print(f"Job {job_id} already COMPLETE — skipping")
+        return
 
-        result = analyze_receipt(bucket, key, job_id, user_id, image_data=image_data)
+    user_id = (existing or {}).get("user_id") or "unknown"
+    user_email = (existing or {}).get("email") or ""
+    created_at = (existing or {}).get("created_at") or now_iso()
 
-        expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
-        update_job(dynamodb, DYNAMODB_TABLE, job_id, {
-            "status": dyn_s("COMPLETE"),
-            "store_category": dyn_s(result.store_category),
-            "price_check_warning": dyn_bool(result.price_check_warning),
-            "price_check_message": dyn_s(result.price_check_message),
-            "vendor": dyn_s(result.vendor),
-            "receipt_date": dyn_s(result.receipt_date),
-            "total": dyn_s(result.total),
-            "items": dyn_s(json.dumps(result.items)),
-            "debug_s3_key": dyn_s(result.debug_s3_key),
-            "textract_debug_s3_key": dyn_s(result.textract_debug_s3_key),
-            **( {"cropped_s3_key": dyn_s(result.cropped_s3_key)} if result.cropped_s3_key else {} ),
-            "image_hash": dyn_s(image_hash),
-            "updated_at": dyn_s(now_iso()),
-            "expires_at": dyn_n(expiry),
-        })
+    update_job(dynamodb, DYNAMODB_TABLE, job_id, {
+        "status": dyn_s("PROCESSING"),
+        "updated_at": dyn_s(now_iso()),
+    })
 
-        store_image_hash(user_id, image_hash, job_id, expiry)
+    image_data = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+    image_hash = hashlib.sha256(image_data).hexdigest()
 
-        if LINE_ITEMS_TABLE:
-            ctx = LineItemContext(
-                job_id=job_id,
-                user_id=user_id,
-                user_email=user_email,
-                created_at=created_at,
-                vendor=result.vendor,
-                receipt_date=result.receipt_date,
-                store_category=result.store_category,
-                expires_at=expiry,
-            )
-            write_line_items(dynamodb, LINE_ITEMS_TABLE, ctx, result.items)
+    prior_job_id = lookup_image_hash(user_id, image_hash)
+    if prior_job_id:
+        prior = get_job(dynamodb, DYNAMODB_TABLE, prior_job_id)
+        prior_status = prior["status"] if prior else None
+        if prior_status == "COMPLETE":
+            print(f"DUPLICATE image_hash={image_hash[:12]}… prior_job={prior_job_id}")
+            s3.delete_object(Bucket=bucket, Key=key)
+            update_job(dynamodb, DYNAMODB_TABLE, job_id, {
+                "status": dyn_s("DUPLICATE"),
+                "image_hash": dyn_s(image_hash),
+                "updated_at": dyn_s(now_iso()),
+            })
+            return
+
+    result = analyze_receipt(bucket, key, job_id, user_id, image_data=image_data)
+
+    expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
+    update_job(dynamodb, DYNAMODB_TABLE, job_id, {
+        "status": dyn_s("COMPLETE"),
+        "store_category": dyn_s(result.store_category),
+        "price_check_warning": dyn_bool(result.price_check_warning),
+        "price_check_message": dyn_s(result.price_check_message),
+        "vendor": dyn_s(result.vendor),
+        "receipt_date": dyn_s(result.receipt_date),
+        "total": dyn_s(result.total),
+        "items": dyn_s(json.dumps(result.items)),
+        "debug_s3_key": dyn_s(result.debug_s3_key),
+        "textract_debug_s3_key": dyn_s(result.textract_debug_s3_key),
+        **( {"cropped_s3_key": dyn_s(result.cropped_s3_key)} if result.cropped_s3_key else {} ),
+        "image_hash": dyn_s(image_hash),
+        "updated_at": dyn_s(now_iso()),
+        "expires_at": dyn_n(expiry),
+    })
+
+    store_image_hash(user_id, image_hash, job_id, expiry)
+
+    if LINE_ITEMS_TABLE:
+        ctx = LineItemContext(
+            job_id=job_id,
+            user_id=user_id,
+            user_email=user_email,
+            created_at=created_at,
+            vendor=result.vendor,
+            receipt_date=result.receipt_date,
+            store_category=result.store_category,
+            expires_at=expiry,
+        )
+        write_line_items(dynamodb, LINE_ITEMS_TABLE, ctx, result.items)
 
 
 def _run_deskew_pipeline(data: bytes, skew_threshold: float) -> tuple[bytes, TextractResult, float | None, float | None, bool]:

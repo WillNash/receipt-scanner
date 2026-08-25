@@ -142,7 +142,7 @@ resource "aws_iam_role_policy" "lambda_api" {
       {
         Sid    = "DynamoDBReadWrite"
         Effect = "Allow"
-        Action = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"]
+        Action = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:TransactWriteItems"]
         Resource = [
           aws_dynamodb_table.jobs.arn,
           "${aws_dynamodb_table.jobs.arn}/index/*",
@@ -177,6 +177,17 @@ resource "aws_iam_role_policy" "lambda_api" {
         Effect = "Allow"
         Action = "s3:GetObject"
         Resource = [
+          "${aws_s3_bucket.uploads.arn}/debug/*",
+          "${aws_s3_bucket.uploads.arn}/cropped/*",
+        ]
+      },
+      {
+        # DeleteObject is required to clean up all S3 objects when a receipt is deleted
+        Sid    = "S3DeleteReceipt"
+        Effect = "Allow"
+        Action = "s3:DeleteObject"
+        Resource = [
+          "${aws_s3_bucket.uploads.arn}/uploads/*",
           "${aws_s3_bucket.uploads.arn}/debug/*",
           "${aws_s3_bucket.uploads.arn}/cropped/*",
         ]

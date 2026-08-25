@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from jose import jwt
 from constants import VALID_ITEM_CATEGORIES
 from dynamo import update_job, now_iso, dyn_s, dyn_n, dyn_bool
@@ -149,27 +150,43 @@ def lambda_handler(event, context):
     return _route(method, path, user_id, user_email, event)
 
 
-def _check_and_increment_count(counter_key: str, limit: int) -> bool:
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+def _check_and_increment_rate_limits(user_id: str, today: str) -> dict | None:
+    """Atomically increment both rate-limit counters only if both are under their limit.
+
+    Returns a 429 make_response dict if either limit is exceeded, else None.
+    Using TransactWriteItems ensures the daily counter is never burned by a global reject.
+    """
     expiry = int((datetime.now(timezone.utc) + timedelta(days=2)).timestamp())
-    resp = dynamodb.update_item(
-        TableName=DYNAMODB_TABLE,
-        Key={"job_id": dyn_s(counter_key)},
-        UpdateExpression="ADD upload_count :one SET expires_at = if_not_exists(expires_at, :exp)",
-        ExpressionAttributeValues={":one": dyn_n(1), ":exp": dyn_n(expiry)},
-        ReturnValues="UPDATED_NEW",
-    )
-    return int(resp["Attributes"]["upload_count"]["N"]) <= limit
-
-
-def check_and_increment_global_count() -> bool:
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return _check_and_increment_count(f"COUNT#GLOBAL#{today}", GLOBAL_UPLOAD_LIMIT)
-
-
-def check_and_increment_daily_count(user_id: str) -> bool:
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return _check_and_increment_count(f"COUNT#{user_id}#{today}", DAILY_UPLOAD_LIMIT)
+    _update = lambda key, limit: {  # noqa: E731
+        "Update": {
+            "TableName": DYNAMODB_TABLE,
+            "Key": {"job_id": dyn_s(key)},
+            "UpdateExpression": "ADD upload_count :one SET expires_at = if_not_exists(expires_at, :exp)",
+            "ConditionExpression": "attribute_not_exists(upload_count) OR upload_count < :limit",
+            "ExpressionAttributeValues": {
+                ":one": dyn_n(1), ":exp": dyn_n(expiry), ":limit": dyn_n(limit),
+            },
+        }
+    }
+    try:
+        dynamodb.transact_write_items(TransactItems=[
+            _update(f"COUNT#{user_id}#{today}", DAILY_UPLOAD_LIMIT),
+            _update(f"COUNT#GLOBAL#{today}", GLOBAL_UPLOAD_LIMIT),
+        ])
+        return None
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] != "TransactionCanceledException":
+            raise
+        reasons = exc.response.get("CancellationReasons", [{}, {}])
+        if reasons[1].get("Code") == "ConditionalCheckFailed":
+            return make_response(429, {
+                "error": "Today's global upload limit has been reached. Try again tomorrow.",
+                "limitType": "global",
+            })
+        return make_response(429, {
+            "error": f"You've reached your daily limit of {DAILY_UPLOAD_LIMIT} uploads. Try again tomorrow.",
+            "limitType": "user",
+        })
 
 
 def handle_upload_url(event, user_id: str, user_email: str):
@@ -189,17 +206,10 @@ def handle_upload_url(event, user_id: str, user_email: str):
             prior_job_id = resp["Item"].get("job_id", {}).get("S", "")
             return make_response(409, {"error": "duplicate", "jobId": prior_job_id})
 
-    if not check_and_increment_daily_count(user_id):
-        return make_response(429, {
-            "error": f"You've reached your daily limit of {DAILY_UPLOAD_LIMIT} uploads. Try again tomorrow.",
-            "limitType": "user",
-        })
-
-    if not check_and_increment_global_count():
-        return make_response(429, {
-            "error": "Today's global upload limit has been reached. Try again tomorrow.",
-            "limitType": "global",
-        })
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rate_err = _check_and_increment_rate_limits(user_id, today)
+    if rate_err:
+        return rate_err
 
     ext = VALID_CONTENT_TYPES[content_type]
     job_id = str(uuid.uuid4())
@@ -234,17 +244,32 @@ def handle_upload_url(event, user_id: str, user_email: str):
 
 
 def handle_list_receipts(user_id: str):
-    result = dynamodb.query(
-        TableName=DYNAMODB_TABLE,
-        IndexName="user-jobs-index",
-        KeyConditionExpression="#uid = :uid",
-        FilterExpression="#st <> :dup",
-        ExpressionAttributeNames={"#uid": "user_id", "#st": "status"},
-        ExpressionAttributeValues={":uid": dyn_s(user_id), ":dup": dyn_s("DUPLICATE")},
-        ScanIndexForward=False,
-        Limit=RECEIPTS_PAGE_SIZE,
-    )
-    receipts = [format_receipt(JobRecord.from_dynamo(item)) for item in result.get("Items", [])]
+    # DynamoDB applies Limit before FilterExpression, so a single page can return
+    # fewer than RECEIPTS_PAGE_SIZE items when DUPLICATEs are present. Paginate
+    # until we have enough non-DUPLICATE results or the GSI is exhausted.
+    receipts = []
+    last_key = None
+    while len(receipts) < RECEIPTS_PAGE_SIZE:
+        kwargs = {
+            "TableName": DYNAMODB_TABLE,
+            "IndexName": "user-jobs-index",
+            "KeyConditionExpression": "#uid = :uid",
+            "FilterExpression": "#st <> :dup",
+            "ExpressionAttributeNames": {"#uid": "user_id", "#st": "status"},
+            "ExpressionAttributeValues": {":uid": dyn_s(user_id), ":dup": dyn_s("DUPLICATE")},
+            "ScanIndexForward": False,
+            "Limit": RECEIPTS_PAGE_SIZE,
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        result = dynamodb.query(**kwargs)
+        for item in result.get("Items", []):
+            receipts.append(format_receipt(JobRecord.from_dynamo(item)))
+            if len(receipts) >= RECEIPTS_PAGE_SIZE:
+                break
+        last_key = result.get("LastEvaluatedKey")
+        if not last_key:
+            break
     return make_response(200, {"receipts": receipts})
 
 
@@ -331,6 +356,17 @@ def handle_delete_receipt(job_id: str | None, user_id: str):
             _delete_line_items_for_job(job_id, user_id, created_at)
         except Exception as exc:
             print(f"ERROR delete_line_items job={job_id}: {exc} — line items may be orphaned")
+
+    # Delete all S3 objects for this job (best-effort — non-fatal)
+    s3_keys = [k for k in [job.s3_key, job.debug_s3_key, job.textract_debug_s3_key, job.cropped_s3_key] if k]
+    if s3_keys:
+        try:
+            s3.delete_objects(
+                Bucket=UPLOADS_BUCKET,
+                Delete={"Objects": [{"Key": k} for k in s3_keys], "Quiet": True},
+            )
+        except Exception as exc:
+            print(f"ERROR deleting S3 objects for job {job_id}: {exc} — objects may be orphaned")
 
     return make_response(200, {"deleted": True})
 
