@@ -4,10 +4,10 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../../../../core/config/app_config.dart';
 import '../../../../core/network/api_client.dart';
+import '../../../../core/storage/capture_file_repository.dart';
 import '../../data/models/upload_job.dart';
 import '../../data/services/upload_service.dart';
 
@@ -23,22 +23,7 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
   List<PhotoUpload> build() => [];
 
   UploadService get _service => ref.read(_uploadServiceProvider);
-
-  static const _savedFolderName = 'receipt-scanner-images';
-
-  Future<Directory> _getSavedDir() async {
-    final docs = await getApplicationDocumentsDirectory();
-    final dir = Directory('${docs.path}/$_savedFolderName');
-    if (!await dir.exists()) await dir.create(recursive: true);
-    return dir;
-  }
-
-  Future<Directory> _getProcessedDir() async {
-    final docs = await getApplicationDocumentsDirectory();
-    final dir = Directory('${docs.path}/$_savedFolderName/processed');
-    if (!await dir.exists()) await dir.create(recursive: true);
-    return dir;
-  }
+  CaptureFileRepository get _fileRepo => ref.read(captureFileRepositoryProvider);
 
   Future<void> pickPhotos() async {
     final picker = ImagePicker();
@@ -72,7 +57,7 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
     final file = await picker.pickImage(source: ImageSource.camera, imageQuality: 90);
     if (file == null) return;
 
-    final dir = await _getSavedDir();
+    final dir = await _fileRepo.getSavedDir();
     final ts = DateTime.now().millisecondsSinceEpoch;
     final savedPath = '${dir.path}/receipt_$ts.jpg';
     await File(file.path).copy(savedPath);
@@ -89,20 +74,7 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
     ];
   }
 
-  Future<List<File>> getSavedCaptures() async {
-    final dir = await _getSavedDir();
-    final entities = await dir.list().toList();
-    return entities
-        .whereType<File>()
-        .where((f) {
-          final lower = f.path.toLowerCase();
-          return lower.endsWith('.jpg') ||
-              lower.endsWith('.jpeg') ||
-              lower.endsWith('.png');
-        })
-        .toList()
-      ..sort((a, b) => b.path.compareTo(a.path));
-  }
+  Future<List<File>> getSavedCaptures() => _fileRepo.listSavedCaptures();
 
   Future<void> addSavedCaptures(List<File> files) async {
     final tooBig = <String>[];
@@ -201,14 +173,8 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
             result: result,
           ));
 
-      // Move saved capture to processed/ now that the job is confirmed complete
       try {
-        final savedDir = await _getSavedDir();
-        if (filePath.startsWith(savedDir.path)) {
-          final processedDir = await _getProcessedDir();
-          final filename = filePath.split('/').last;
-          await File(filePath).rename('${processedDir.path}/${jobId}_$filename');
-        }
+        await _fileRepo.moveToProcessed(jobId, filePath);
       } catch (_) {
         // Non-fatal — photo stays in active folder if move fails
       }
