@@ -17,7 +17,7 @@ _BRIGHT_MAX_ASPECT = 5.0
 # --- MSER tuning ---
 _MSER_MIN_BBOX = 20
 _MSER_MAX_BBOX = 1500
-_MSER_DELTA = 0.25
+_MSER_MAX_VARIATION = 0.25
 _MSER_MIN_FILL = 0.1
 _MSER_MAX_FILL = 0.9
 _MSER_MIN_ASPECT = 0.15
@@ -225,7 +225,7 @@ def _dense_band(centres: list, size: int) -> tuple[int, int]:
 def _mser_density(small, sw, sh):
     """Original MSER text-density approach — last-resort fallback."""
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    mser = cv2.MSER_create(5, _MSER_MIN_BBOX, _MSER_MAX_BBOX, _MSER_DELTA)
+    mser = cv2.MSER_create(5, _MSER_MIN_BBOX, _MSER_MAX_BBOX, _MSER_MAX_VARIATION)
     regions, _ = mser.detectRegions(gray)
     valid_cx, valid_cy = [], []
     for region in regions:

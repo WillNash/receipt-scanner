@@ -60,8 +60,8 @@ class ReceiptJob {
 
   bool get isComplete => status == 'COMPLETE';
   bool get isFailed => status == 'FAILED';
-  bool get isPending => status == 'PENDING';
   bool get isDuplicate => status == 'DUPLICATE';
+  bool get isProcessing => status == 'PROCESSING';
 
   factory ReceiptJob.fromJson(Map<String, dynamic> json) {
     final rawItems = json['items'] as List<dynamic>? ?? [];

@@ -77,9 +77,6 @@ function onScanMore() {
   view.value = 'upload'
 }
 
-function onHistoryRefresh() {
-  historyKey.value++
-}
 </script>
 
 <template>
@@ -113,7 +110,6 @@ function onHistoryRefresh() {
       <HistorySection
         v-if="isAuthenticated"
         :key="historyKey"
-        @saved="onHistoryRefresh"
       />
     </main>
   </div>

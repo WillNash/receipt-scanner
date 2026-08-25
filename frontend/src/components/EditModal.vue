@@ -19,6 +19,7 @@ const editItems = ref(
   (Array.isArray(props.job.items) ? props.job.items : []).map(it => ({ ...it }))
 )
 const saving = ref(false)
+const saveError = ref('')
 
 const receiptTotal = parseFloat(props.job.total) || 0
 
@@ -73,6 +74,7 @@ onUnmounted(() => {
 
 async function save() {
   saving.value = true
+  saveError.value = ''
   try {
     const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts/${props.job.jobId}`, {
       method: 'PATCH',
@@ -88,7 +90,7 @@ async function save() {
     emit('close')
   } catch (err) {
     saving.value = false
-    alert('Failed to save: ' + err.message)
+    saveError.value = 'Failed to save: ' + err.message
   }
 }
 </script>
@@ -146,6 +148,8 @@ async function save() {
           {{ priceSumText }}
         </div>
       </div>
+
+      <p v-if="saveError" class="save-error" role="alert">{{ saveError }}</p>
 
       <div class="modal-footer">
         <button class="btn btn-secondary" @click="emit('close')">Cancel</button>
@@ -307,6 +311,12 @@ async function save() {
 .price-sum--warn {
   background: #fff3e0;
   color: #e65100;
+}
+
+.save-error {
+  color: #dc2626;
+  font-size: 0.85rem;
+  margin: 0.5rem 0 0;
 }
 
 .modal-footer {
