@@ -91,7 +91,7 @@ function onHistoryRefresh() {
 
     <main>
       <UploadSection
-        v-if="view === 'upload'"
+        v-show="view === 'upload'"
         @scan-started="onScanStarted"
         @status-update="onStatusUpdate"
         @scan-complete="onScanComplete"
