@@ -76,7 +76,7 @@ async function pollUntilDone(jobId, signal, count = 0) {
     const resp = await apiFetch(`${CONFIG.apiBaseUrl}/jobs/${jobId}`, { signal })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     const job = await resp.json()
-    if (job.status === 'COMPLETE' || job.status === 'FAILED') return job
+    if (job.status === 'COMPLETE' || job.status === 'FAILED' || job.status === 'DUPLICATE') return job
   } catch (err) {
     if (err.name === 'AbortError') return { jobId, status: 'CANCELLED' }
     console.error(`Poll error for ${jobId}:`, err)

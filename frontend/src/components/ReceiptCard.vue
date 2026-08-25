@@ -32,7 +32,11 @@ function toggleDebug() {
 </script>
 
 <template>
-  <div v-if="job.status === 'FAILED'" class="receipt-card receipt-card--failed">
+  <div v-if="job.status === 'DUPLICATE'" class="receipt-card receipt-card--failed">
+    <p class="failed-text">Already scanned — see your history for the original receipt.</p>
+  </div>
+
+  <div v-else-if="job.status === 'FAILED'" class="receipt-card receipt-card--failed">
     <p class="failed-text">
       {{
         job.reason === 'timeout'
