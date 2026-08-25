@@ -76,10 +76,10 @@ class AuthNotifier extends Notifier<AuthState> {
     }
   }
 
-  Future<void> signIn(String username, String password) async {
+  Future<void> signIn() async {
     state = const AuthLoading();
     try {
-      final tokens = await _repo.signIn(username, password);
+      final tokens = await _repo.signIn();
       state = Authenticated(
         tokens: tokens,
         email: AuthRepository.extractEmail(tokens.idToken),
@@ -91,7 +91,8 @@ class AuthNotifier extends Notifier<AuthState> {
   }
 
   Future<void> signOut() async {
-    await _repo.clearTokens();
+    final tokens = state is Authenticated ? (state as Authenticated).tokens : null;
+    await _repo.signOut(tokens);
     state = const Unauthenticated();
   }
 
