@@ -163,13 +163,6 @@ def crop_receipt(s3, bucket: str, key: str, image_data: bytes | None = None) -> 
         return None
 
 
-_CROP_STRATEGIES = [
-    ("bright",   _bright_region),
-    ("contour",  _edge_contour),
-    ("mser",     _mser_density),
-]
-
-
 def _find_receipt(small, sw, sh):
     """Try detection methods in priority order. Returns (method, x0, y0, x1, y1) or None."""
     for method, fn in _CROP_STRATEGIES:
@@ -250,3 +243,10 @@ def _mser_density(small, sw, sh):
     x0, x1 = _dense_band(valid_cx, sw)
     y0, y1 = _dense_band(valid_cy, sh)
     return x0, y0, x1, y1
+
+
+_CROP_STRATEGIES = [
+    ("bright",   _bright_region),
+    ("contour",  _edge_contour),
+    ("mser",     _mser_density),
+]
