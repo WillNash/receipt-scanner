@@ -93,7 +93,7 @@ resource "aws_iam_role_policy" "lambda_processor" {
       {
         Sid    = "LineItemsWrite"
         Effect = "Allow"
-        Action = "dynamodb:PutItem"
+        Action = ["dynamodb:PutItem", "dynamodb:BatchWriteItem"]
         Resource = aws_dynamodb_table.line_items.arn
       },
       {
