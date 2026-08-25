@@ -39,12 +39,21 @@ async function selectFiles(files) {
 
     if (isHeic(file)) {
       try {
-        const result = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 })
+        console.log('heic2any: starting conversion for', file.name, file.size, 'bytes')
+        const timeout = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('heic2any timed out after 30s')), 30_000)
+        )
+        const result = await Promise.race([
+          heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 }),
+          timeout,
+        ])
+        console.log('heic2any: done', result)
         const blob = Array.isArray(result) ? result[0] : result
         const name = file.name.replace(/\.(heic|heif)$/i, '.jpg')
         f = new File([blob], name, { type: 'image/jpeg' })
       } catch (err) {
-        errors.push(`${file.name}: HEIC conversion failed.`)
+        console.error('heic2any error:', err)
+        errors.push(`${file.name}: HEIC conversion failed — ${err.message}`)
         continue
       }
     } else if (!['image/jpeg', 'image/png'].includes(file.type)) {
