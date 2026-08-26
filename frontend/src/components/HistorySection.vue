@@ -16,7 +16,7 @@ async function loadHistory() {
     const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts`)
     if (!resp.ok) return
     const data = await resp.json()
-    receipts.value = (data.receipts || []).filter(r => r.status === 'COMPLETE')
+    receipts.value = data.receipts || []
   } catch (err) {
     console.error('History load error:', err)
   }

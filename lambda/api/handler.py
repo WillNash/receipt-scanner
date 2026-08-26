@@ -259,9 +259,8 @@ def handle_upload_url(event, user_id: str, user_email: str):
 
 
 def handle_list_receipts(user_id: str):
-    # DynamoDB applies Limit before FilterExpression, so a single page can return
-    # fewer than RECEIPTS_PAGE_SIZE items when DUPLICATEs are present. Paginate
-    # until we have enough non-DUPLICATE results or the GSI is exhausted.
+    # DynamoDB applies Limit before FilterExpression, so paginate until we have
+    # RECEIPTS_PAGE_SIZE COMPLETE results or the GSI is exhausted.
     receipts = []
     last_key = None
     while len(receipts) < RECEIPTS_PAGE_SIZE:
@@ -269,9 +268,9 @@ def handle_list_receipts(user_id: str):
             "TableName": DYNAMODB_TABLE,
             "IndexName": "user-jobs-index",
             "KeyConditionExpression": "#uid = :uid",
-            "FilterExpression": "#st <> :dup",
+            "FilterExpression": "#st = :complete",
             "ExpressionAttributeNames": {"#uid": "user_id", "#st": "status"},
-            "ExpressionAttributeValues": {":uid": dyn_s(user_id), ":dup": dyn_s("DUPLICATE")},
+            "ExpressionAttributeValues": {":uid": dyn_s(user_id), ":complete": dyn_s("COMPLETE")},
             "ScanIndexForward": False,
             "Limit": RECEIPTS_PAGE_SIZE,
         }
