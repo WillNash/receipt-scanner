@@ -662,5 +662,230 @@ class TestGroupBlocksAug2026b(unittest.TestCase):
         self.assertIn("STOKE IPA 330M 12F) CAN  $22.99", _lines(rows))
 
 
+# ---------------------------------------------------------------------------
+# Fixture: PAK'nSAVE Palmerston North, 26 Aug 2026 — second scan (81 blocks, 55 rows)
+# job_id: 760bb942-eb84-44e7-9d7d-c7af06124899
+# Ground truth from image inspection.  This is a flatter scan of the same
+# receipt as PAKNSAVE_20260826 (same items, same totals), so it provides an
+# independent check that the algorithm produces correct groupings when the
+# curl is less severe.  Key cases confirmed by the image:
+#   • COMVITA chains with its own $6.99 (gap only 0.2%)
+#   • GOLDEN CRUMPETS ROUND is a no-price anchor (2@ below)
+#   • WATTIES VEGETBLE 430G carries a separate $4.89 in addition to the
+#     2@ breakdown row, because PAK'nSAVE prints the unit price twice
+#   • NZ MUTTON BONES = $14.99 (not $5.99; the curled scan had these swapped)
+#   • 12 BALANCE DUE and EFTPOS both chain with their own $77.83
+#   • The lone * chains with EFTPOS one row below it (gap 0.3%)
+# ---------------------------------------------------------------------------
+PAKNSAVE_760bb942 = [
+    _block("PAKńSAVE",                                     8.8,  17),
+    _block("**** PAK'nSAVE PALMERSTON NORTH **",          13.9,  26),
+    _block("327 FERGUSON STREET",                         15.3,  36),
+    _block("SDBRJ LIMITED",                               16.7,  40),
+    _block("PH: (06) 356-4043",                           18.1,  37),
+    _block("Order online and collect from the store",     20.7,  22),
+    _block("Go to paknsave.co.nz/shop",                   22.3,  31),
+    _block("KIA KAHA. STRESSED OR OVERWHELMED?",          23.5,  26),
+    _block("CALL OR TEXT 1737 FOR FREE KORERO",           24.9,  26),
+    _block("COMVITA MANUKA HONEY LOZENGES LEMON 54G",     26.3,  13),
+    _block("$6.99",                                       26.5,  80),
+    _block("GOLDEN CRUMPETS ROUND 6PK 300G",              27.7,  13),
+    _block("2@",                                          29.2,  26),
+    _block("$2.79",                                       29.1,  38),
+    _block("$5.58",                                       29.2,  80),
+    _block("GOLDEN CRUMPETS ROUN",                        30.4,  13),
+    _block("-$0.58",                                      30.6,  78),
+    _block("WATTIES SOUP/DAY HOMESTYLE CHICKEN 430G",     31.6,  13),
+    _block("2@",                                          33.3,  26),
+    _block("$4.89",                                       33.2,  38),
+    _block("$9.78",                                       33.4,  80),
+    _block("WATTIES SOUP/DAY HOMESTYLE/VEGETBLE 430G",    34.4,  13),
+    _block("$4.89",                                       34.7,  80),
+    _block("NZ TREVALLY FILLETS",                         35.9,  13),
+    _block("$14.72",                                      36.1,  78),
+    _block("CAULIFLOWER",                                 37.3,  14),
+    _block("$2.99",                                       37.4,  79),
+    _block("TONZU ORGANIC TOFU FIRM 300G",                38.6,  14),
+    _block("$5.49",                                       38.8,  79),
+    _block("BANANA BREAD",                                40.1,  14),
+    _block("$6.99",                                       40.1,  79),
+    _block("CIABATTA BUNS 6PK",                           41.4,  14),
+    _block("$5.99",                                       41.5,  79),
+    _block("NZ MUTTON BONES",                             42.8,  14),
+    _block("$14.99",                                      42.9,  78),
+    _block("12 BALANCE DUE",                              45.5,  14),
+    _block("$77.83",                                      45.5,  78),
+    _block("EFTPOS",                                      46.9,  18),
+    _block("$77.83",                                      46.9,  78),
+    _block("************8996",                            48.2,  22),
+    _block("SUB TOTAL",                                   50.9,  18),
+    _block("$67.68",                                      50.9,  78),
+    _block("TOTAL GST",                                   52.3,  18),
+    _block("$10.15",                                      52.3,  78),
+    _block("TOTAL",                                       53.6,  18),
+    _block("$77.83",                                      53.6,  78),
+    _block("CHANGE",                                      56.3,  14),
+    _block("$0.00",                                       56.3,  79),
+    _block("PAK N SAVE PALMERSTO",                        58.8,  11),
+    _block("327 FERGUSON STREET",                         60.2,  11),
+    _block("PALMERSTON NORTH",                            61.5,  11),
+    _block("*",                                           64.5,  11),
+    _block("EFTPOS",                                      64.2,  27),
+    _block("TERMINAL",                                    65.5,  11),
+    _block("04155066",                                    65.6,  41),
+    _block("TIME",                                        66.8,  11),
+    _block("26Aug26 13:10",                               66.8,  34),
+    _block("TRAN 108573",                                 68.1,  11),
+    _block("CHEQUE",                                      68.1,  44),
+    _block("EFTPOS",                                      69.5,  11),
+    _block("CARD",                                        70.8,  11),
+    _block("8996",                                        70.8,  46),
+    _block("PURCHASE",                                    72.1,  11),
+    _block("NZD77.83",                                    72.0,  41),
+    _block("TOTAL",                                       73.4,  11),
+    _block("NZD77.83",                                    73.3,  41),
+    _block("ACCEPTED",                                    76.0,  26),
+    _block("*",                                           79.0,  50),
+    _block("CUSTOMER COPY",                               80.0,  22),
+    _block("Join Club+ and get ready to shop smarter.",   81.3,  21),
+    _block("Visit clubplus.co.nz",                        82.7,  35),
+    _block("CASHIER NAME: SCO Cashier P",                 85.2,  14),
+    _block("26/08/2026 13:10:55 05082 066 6709 0216",     86.5,  14),
+    _block("TAX INVOICE ************",                    88.0,  42),
+    _block("**** GST No: 138-395-464 ****",               89.3,  30),
+    _block("All items GST inclusive",                     90.6,  34),
+    _block("unless otherwise specified by (*)",           91.9,  27),
+    _block("BE IN TO WIN $500 ********",                  94.7,  38),
+    _block("Tell us how we did today and go",             96.0,  29),
+    _block("into the monthly draw to win a",              97.3,  30),
+    _block("$500 PAK'nSave gift card",                    98.6,  34),
+]
+
+PAKNSAVE_760bb942_EXPECTED = [
+    "PAKńSAVE",
+    "**** PAK'nSAVE PALMERSTON NORTH **",
+    "327 FERGUSON STREET",
+    "SDBRJ LIMITED",
+    "PH: (06) 356-4043",
+    "Order online and collect from the store",
+    "Go to paknsave.co.nz/shop",
+    "KIA KAHA. STRESSED OR OVERWHELMED?",
+    "CALL OR TEXT 1737 FOR FREE KORERO",
+    "COMVITA MANUKA HONEY LOZENGES LEMON 54G  $6.99",
+    "GOLDEN CRUMPETS ROUND 6PK 300G",
+    "2@  $2.79  $5.58",
+    "GOLDEN CRUMPETS ROUN  -$0.58",
+    "WATTIES SOUP/DAY HOMESTYLE CHICKEN 430G",
+    "2@  $4.89  $9.78",
+    "WATTIES SOUP/DAY HOMESTYLE/VEGETBLE 430G  $4.89",
+    "NZ TREVALLY FILLETS  $14.72",
+    "CAULIFLOWER  $2.99",
+    "TONZU ORGANIC TOFU FIRM 300G  $5.49",
+    "BANANA BREAD  $6.99",
+    "CIABATTA BUNS 6PK  $5.99",
+    "NZ MUTTON BONES  $14.99",
+    "12 BALANCE DUE  $77.83",
+    "EFTPOS  $77.83",
+    "************8996",
+    "SUB TOTAL  $67.68",
+    "TOTAL GST  $10.15",
+    "TOTAL  $77.83",
+    "CHANGE  $0.00",
+    "PAK N SAVE PALMERSTO",
+    "327 FERGUSON STREET",
+    "PALMERSTON NORTH",
+    "*  EFTPOS",
+    "TERMINAL  04155066",
+    "TIME  26Aug26 13:10",
+    "TRAN 108573  CHEQUE",
+    "EFTPOS",
+    "CARD  8996",
+    "PURCHASE  NZD77.83",
+    "TOTAL  NZD77.83",
+    "ACCEPTED",
+    "*",
+    "CUSTOMER COPY",
+    "Join Club+ and get ready to shop smarter.",
+    "Visit clubplus.co.nz",
+    "CASHIER NAME: SCO Cashier P",
+    "26/08/2026 13:10:55 05082 066 6709 0216",
+    "TAX INVOICE ************",
+    "**** GST No: 138-395-464 ****",
+    "All items GST inclusive",
+    "unless otherwise specified by (*)",
+    "BE IN TO WIN $500 ********",
+    "Tell us how we did today and go",
+    "into the monthly draw to win a",
+    "$500 PAK'nSave gift card",
+]
+
+
+class TestGroupBlocksGroundTruth760bb942(unittest.TestCase):
+    def test_row_count(self):
+        rows, _, _ = group_blocks(PAKNSAVE_760bb942)
+        self.assertEqual(len(rows), 55)
+
+    def test_all_blocks_assigned(self):
+        rows, _, _ = group_blocks(PAKNSAVE_760bb942)
+        self.assertEqual(sum(len(r) for r in rows), len(PAKNSAVE_760bb942))
+
+    def test_reading_order(self):
+        rows, _, _ = group_blocks(PAKNSAVE_760bb942)
+        tops = [min(b["Geometry"]["BoundingBox"]["Top"] for b in row) for row in rows]
+        self.assertEqual(tops, sorted(tops))
+
+    def test_merged_lines(self):
+        rows, _, _ = group_blocks(PAKNSAVE_760bb942)
+        self.assertEqual(_lines(rows), PAKNSAVE_760bb942_EXPECTED)
+
+    def test_comvita_chains_with_price(self):
+        """COMVITA and $6.99 are 0.2% apart — must chain in Phase 2."""
+        rows, _, _ = group_blocks(PAKNSAVE_760bb942)
+        self.assertIn("COMVITA MANUKA HONEY LOZENGES LEMON 54G  $6.99", _lines(rows))
+
+    def test_golden_crumpets_anchor_alone(self):
+        """GOLDEN CRUMPETS ROUND is a no-price anchor — description only."""
+        rows, _, _ = group_blocks(PAKNSAVE_760bb942)
+        result = _lines(rows)
+        self.assertIn("GOLDEN CRUMPETS ROUND 6PK 300G", result)
+        self.assertFalse(any("GOLDEN CRUMPETS ROUND" in l and "$" in l for l in result))
+
+    def test_golden_crumpets_discount_row(self):
+        """GOLDEN CRUMPETS ROUN and -$0.58 form a separate discount row."""
+        rows, _, _ = group_blocks(PAKNSAVE_760bb942)
+        self.assertIn("GOLDEN CRUMPETS ROUN  -$0.58", _lines(rows))
+
+    def test_watties_chicken_anchor_alone(self):
+        """WATTIES CHICKEN is a no-price anchor — description only."""
+        rows, _, _ = group_blocks(PAKNSAVE_760bb942)
+        result = _lines(rows)
+        self.assertIn("WATTIES SOUP/DAY HOMESTYLE CHICKEN 430G", result)
+        self.assertFalse(any("WATTIES SOUP/DAY HOMESTYLE CHICKEN" in l and "$" in l for l in result))
+
+    def test_watties_vegetble_carries_unit_price(self):
+        """WATTIES VEGETBLE 430G chains with its own right-edge $4.89."""
+        rows, _, _ = group_blocks(PAKNSAVE_760bb942)
+        self.assertIn("WATTIES SOUP/DAY HOMESTYLE/VEGETBLE 430G  $4.89", _lines(rows))
+
+    def test_mutton_bones_price(self):
+        """NZ MUTTON BONES = $14.99 (not $5.99, confirmed by image)."""
+        rows, _, _ = group_blocks(PAKNSAVE_760bb942)
+        result = _lines(rows)
+        self.assertIn("NZ MUTTON BONES  $14.99", result)
+        self.assertFalse(any("NZ MUTTON BONES" in l and "$5.99" in l for l in result))
+
+    def test_balance_due_and_eftpos_chain(self):
+        """12 BALANCE DUE and EFTPOS each chain with their own $77.83."""
+        rows, _, _ = group_blocks(PAKNSAVE_760bb942)
+        result = _lines(rows)
+        self.assertIn("12 BALANCE DUE  $77.83", result)
+        self.assertIn("EFTPOS  $77.83", result)
+
+    def test_star_chains_with_eftpos(self):
+        """The lone * (↕64.5%) chains with EFTPOS (↕64.2%) 0.3% away."""
+        rows, _, _ = group_blocks(PAKNSAVE_760bb942)
+        self.assertIn("*  EFTPOS", _lines(rows))
+
+
 if __name__ == "__main__":
     unittest.main()
