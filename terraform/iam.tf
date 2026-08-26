@@ -151,7 +151,7 @@ resource "aws_iam_role_policy" "lambda_api" {
       {
         Sid    = "ImageHashesDelete"
         Effect = "Allow"
-        Action = ["dynamodb:GetItem", "dynamodb:DeleteItem"]
+        Action = ["dynamodb:GetItem", "dynamodb:DeleteItem", "dynamodb:TransactWriteItems"]
         Resource = aws_dynamodb_table.image_hashes.arn
       },
       {
@@ -169,7 +169,7 @@ resource "aws_iam_role_policy" "lambda_api" {
         Sid      = "S3PresignedPut"
         Effect   = "Allow"
         Action   = "s3:PutObject"
-        Resource = "${aws_s3_bucket.uploads.arn}/*"
+        Resource = "${aws_s3_bucket.uploads.arn}/uploads/*"
       },
       {
         # GetObject is required to generate presigned GET URLs for debug and cropped image downloads
