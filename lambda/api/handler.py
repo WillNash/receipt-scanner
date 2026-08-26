@@ -315,29 +315,35 @@ def handle_get_job(job_id: str | None, user_id: str):
 def _delete_line_items_for_job(job_id: str, user_id: str, created_at: str) -> None:
     """Query and batch-delete all line_items rows for a given job."""
     prefix = f"{created_at}#{job_id}#"
-    resp = dynamodb.query(
-        TableName=LINE_ITEMS_TABLE,
-        KeyConditionExpression="#uid = :uid AND begins_with(#sk, :prefix)",
-        ExpressionAttributeNames={"#uid": "user_id", "#sk": "item_sk"},
-        ExpressionAttributeValues={
+    query_kwargs = {
+        "TableName": LINE_ITEMS_TABLE,
+        "KeyConditionExpression": "#uid = :uid AND begins_with(#sk, :prefix)",
+        "ExpressionAttributeNames": {"#uid": "user_id", "#sk": "item_sk"},
+        "ExpressionAttributeValues": {
             ":uid": dyn_s(user_id),
             ":prefix": dyn_s(prefix),
         },
-        ProjectionExpression="#uid, #sk",
-    )
-    keys_to_delete = [
-        {"user_id": it["user_id"], "item_sk": it["item_sk"]}
-        for it in resp.get("Items", [])
-    ]
-    for i in range(0, len(keys_to_delete), 25):
-        chunk = keys_to_delete[i:i + 25]
-        dynamodb.batch_write_item(
-            RequestItems={
-                LINE_ITEMS_TABLE: [
-                    {"DeleteRequest": {"Key": key}} for key in chunk
-                ]
-            }
-        )
+        "ProjectionExpression": "#uid, #sk",
+    }
+    while True:
+        resp = dynamodb.query(**query_kwargs)
+        keys_to_delete = [
+            {"user_id": it["user_id"], "item_sk": it["item_sk"]}
+            for it in resp.get("Items", [])
+        ]
+        for i in range(0, len(keys_to_delete), 25):
+            chunk = keys_to_delete[i:i + 25]
+            dynamodb.batch_write_item(
+                RequestItems={
+                    LINE_ITEMS_TABLE: [
+                        {"DeleteRequest": {"Key": key}} for key in chunk
+                    ]
+                }
+            )
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        query_kwargs["ExclusiveStartKey"] = last_key
 
 
 def handle_delete_receipt(job_id: str | None, user_id: str):
