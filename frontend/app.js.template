@@ -540,7 +540,7 @@ async function showEditModal(job) {
     });
     sum = Math.round(sum * 100) / 100;
     const diff = Math.round((sum - receiptTotal) * 100) / 100;
-    const ok = Math.abs(diff) <= 0.01;
+    const ok = Math.abs(diff) < 0.01;
     bar.style.background = ok ? "#e8f5e9" : "#fff3e0";
     bar.style.color = ok ? "#2e7d32" : "#e65100";
     bar.textContent = `Items sum: $${sum.toFixed(2)} / Receipt total: $${receiptTotal.toFixed(2)}`

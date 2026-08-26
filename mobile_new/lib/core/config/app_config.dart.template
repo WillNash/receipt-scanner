@@ -6,6 +6,17 @@ class AppConfig {
   static const String apiBaseUrl = '__API_BASE_URL__';
   static const String cognitoClientId = '__COGNITO_CLIENT_ID__';
 
+  static const String _cognitoBaseUrl = '__COGNITO_BASE_URL__';
+
+  static const String cognitoAuthEndpoint = '$_cognitoBaseUrl/oauth2/authorize';
+  static const String cognitoTokenEndpoint = '$_cognitoBaseUrl/oauth2/token';
+  static const String cognitoEndSessionEndpoint = '$_cognitoBaseUrl/logout';
+
+  static const String redirectUri = 'com.willnash.receiptscanner://callback';
+  static const String postLogoutRedirectUri = 'com.willnash.receiptscanner://logout';
+
+  static const List<String> scopes = ['email', 'openid', 'profile'];
+
   static const int maxFileSizeBytes = 20 * 1024 * 1024;
   static const int pollIntervalMs = 3000;
   static const int pollMaxAttempts = 60;

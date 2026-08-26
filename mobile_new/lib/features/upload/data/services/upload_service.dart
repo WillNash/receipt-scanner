@@ -7,7 +7,11 @@ import '../../../receipts/data/models/receipt.dart';
 import '../models/upload_job.dart';
 
 class UploadService {
-  UploadService(this._apiDio) : _s3Dio = Dio();
+  UploadService(this._apiDio)
+      : _s3Dio = Dio(BaseOptions(
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
+        ));
 
   final Dio _apiDio;
   // Separate Dio for S3 — must NOT include the Authorization header.
@@ -70,7 +74,9 @@ class UploadService {
   }
 
   static String contentTypeFor(String filePath) {
-    final ext = '.${filePath.split('.').last.toLowerCase()}';
-    return ext == '.png' ? 'image/png' : 'image/jpeg';
+    final ext = filePath.split('.').last.toLowerCase();
+    if (ext == 'png') return 'image/png';
+    if (ext == 'jpg' || ext == 'jpeg') return 'image/jpeg';
+    throw ArgumentError('Unsupported file extension: .$ext');
   }
 }

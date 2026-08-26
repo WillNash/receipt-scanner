@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../config/app_config.dart';
 import '../../features/auth/presentation/view_models/auth_view_model.dart';
 
 final apiClientProvider = Provider<Dio>((ref) {
@@ -20,9 +21,11 @@ final apiClientProvider = Provider<Dio>((ref) {
         handler.next(options);
       },
       onError: (error, handler) {
-        // 401 means the token is invalid/expired and refresh failed — sign out.
         if (error.response?.statusCode == 401) {
-          ref.read(authProvider.notifier).signOut();
+          final uri = error.requestOptions.uri.toString();
+          if (uri.startsWith(AppConfig.apiBaseUrl)) {
+            ref.read(authProvider.notifier).signOut();
+          }
         }
         handler.next(error);
       },

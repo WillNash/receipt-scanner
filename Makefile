@@ -1,4 +1,4 @@
-.PHONY: setup package plan apply deploy smoke destroy
+.PHONY: setup package plan apply deploy frontend-dev smoke destroy
 
 TERRAFORM_DIR = terraform
 SCRIPTS_DIR   = scripts
@@ -20,6 +20,9 @@ apply: package
 
 deploy: apply
 	python3 $(SCRIPTS_DIR)/inject_config.py
+
+frontend-dev:
+	cd frontend && npm run dev
 
 smoke:
 	python3 $(SCRIPTS_DIR)/smoke_test.py

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/storage/capture_file_repository.dart';
 import '../../data/models/upload_job.dart';
 import '../view_models/upload_view_model.dart';
 
@@ -15,6 +16,16 @@ class UploadScreen extends ConsumerWidget {
     final notifier = ref.read(uploadProvider.notifier);
     final hasIdle = uploads.any((u) => u.status == UploadStatus.idle);
     final hasDone = uploads.any((u) => u.isDone);
+
+    ref.listen<List<String>>(oversizedWarningsProvider, (_, warnings) {
+      if (warnings.isEmpty) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${warnings.length} file(s) skipped — over 20 MB limit.'),
+        ),
+      );
+      ref.read(oversizedWarningsProvider.notifier).state = [];
+    });
 
     return Scaffold(
       appBar: AppBar(
@@ -40,29 +51,12 @@ class UploadScreen extends ConsumerWidget {
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       floatingActionButton: _BottomActions(
         hasIdle: hasIdle,
-        onCamera: () async {
-          await notifier.takePhoto();
-          _consumeWarnings(context, notifier);
-        },
-        onGallery: () async {
-          await notifier.pickPhotos();
-          _consumeWarnings(context, notifier);
-        },
+        onCamera: () => notifier.takePhoto(),
+        onGallery: () => notifier.pickPhotos(),
         onSaved: () => _showSavedCapturesPicker(context, notifier),
         onUpload: notifier.uploadAll,
       ),
     );
-  }
-
-  void _consumeWarnings(BuildContext context, UploadNotifier notifier) {
-    final warnings = notifier.consumeOversizedWarnings();
-    if (warnings.isNotEmpty && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${warnings.length} file(s) skipped — over 20 MB limit.'),
-        ),
-      );
-    }
   }
 
   Future<void> _showSavedCapturesPicker(
@@ -71,11 +65,10 @@ class UploadScreen extends ConsumerWidget {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (_) => _SavedCapturesPicker(notifier: notifier),
+      builder: (_) => const _SavedCapturesPicker(),
     );
     if (selected != null && selected.isNotEmpty) {
       await notifier.addSavedCaptures(selected);
-      if (context.mounted) _consumeWarnings(context, notifier);
     }
   }
 }
@@ -196,15 +189,15 @@ class _TrayButton extends StatelessWidget {
   }
 }
 
-class _SavedCapturesPicker extends StatefulWidget {
-  const _SavedCapturesPicker({required this.notifier});
-  final UploadNotifier notifier;
+class _SavedCapturesPicker extends ConsumerStatefulWidget {
+  const _SavedCapturesPicker();
 
   @override
-  State<_SavedCapturesPicker> createState() => _SavedCapturesPickerState();
+  ConsumerState<_SavedCapturesPicker> createState() =>
+      _SavedCapturesPickerState();
 }
 
-class _SavedCapturesPickerState extends State<_SavedCapturesPicker> {
+class _SavedCapturesPickerState extends ConsumerState<_SavedCapturesPicker> {
   List<File>? _files;
   final Set<String> _selected = {};
 
@@ -215,7 +208,8 @@ class _SavedCapturesPickerState extends State<_SavedCapturesPicker> {
   }
 
   Future<void> _load() async {
-    final files = await widget.notifier.getSavedCaptures();
+    final files =
+        await ref.read(captureFileRepositoryProvider).listSavedCaptures();
     if (mounted) setState(() => _files = files);
   }
 

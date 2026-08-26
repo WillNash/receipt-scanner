@@ -5,6 +5,7 @@ class LineItem {
     this.packageSize,
     this.unitPrice,
     this.price,
+    this.lineTotal,
     this.discount,
     this.itemCategory,
     this.novaGroup,
@@ -15,6 +16,7 @@ class LineItem {
   final String? packageSize;
   final String? unitPrice;
   final String? price;
+  final String? lineTotal;
   final String? discount;
   final String? itemCategory;
   final int? novaGroup;
@@ -25,6 +27,7 @@ class LineItem {
         packageSize: json['package_size'] as String?,
         unitPrice: json['unit_price'] as String?,
         price: json['price'] as String?,
+        lineTotal: json['line_total'] as String?,
         discount: json['discount'] as String?,
         itemCategory: json['item_category'] as String?,
         novaGroup: json['nova_group'] as int?,
@@ -41,6 +44,9 @@ class ReceiptJob {
     this.total,
     this.items = const [],
     this.updatedAt,
+    this.storeCategory,
+    this.priceCheckWarning = false,
+    this.priceCheckMessage,
   });
 
   final String jobId;
@@ -51,11 +57,14 @@ class ReceiptJob {
   final String? total;
   final List<LineItem> items;
   final String? updatedAt;
+  final String? storeCategory;
+  final bool priceCheckWarning;
+  final String? priceCheckMessage;
 
   bool get isComplete => status == 'COMPLETE';
   bool get isFailed => status == 'FAILED';
-  bool get isPending => status == 'PENDING';
   bool get isDuplicate => status == 'DUPLICATE';
+  bool get isProcessing => status == 'PROCESSING';
 
   factory ReceiptJob.fromJson(Map<String, dynamic> json) {
     final rawItems = json['items'] as List<dynamic>? ?? [];
@@ -70,6 +79,9 @@ class ReceiptJob {
           .map((e) => LineItem.fromJson(e as Map<String, dynamic>))
           .toList(),
       updatedAt: json['updatedAt'] as String?,
+      storeCategory: json['storeCategory'] as String?,
+      priceCheckWarning: json['priceCheckWarning'] as bool? ?? false,
+      priceCheckMessage: json['priceCheckMessage'] as String?,
     );
   }
 }

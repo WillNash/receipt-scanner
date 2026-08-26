@@ -31,6 +31,9 @@ dependencies:
   # SHA-256 hashing for duplicate detection
   crypto: ^3.0.3
 
+  # OAuth2 PKCE via hosted UI (replaces USER_PASSWORD_AUTH)
+  flutter_appauth: ^8.0.0
+
   # File system paths
   path_provider: ^2.1.2
 

@@ -11,9 +11,8 @@ resource "aws_sqs_queue" "image_jobs_dlq" {
 resource "aws_sqs_queue" "image_jobs" {
   name = "${var.project_name}-jobs"
 
-  # Must be >= Lambda timeout. Use 6× the processor timeout (6 × 60s = 360s).
-  # The researcher example shows 300s which is arithmetically wrong — use 360s.
-  visibility_timeout_seconds = 360
+  # Must be >= Lambda timeout. Use 6× the processor timeout (6 × 120s = 720s).
+  visibility_timeout_seconds = 720
   message_retention_seconds  = 86400 # 1 day
 
   redrive_policy = jsonencode({

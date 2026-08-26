@@ -81,7 +81,7 @@ resource "aws_iam_role_policy" "lambda_processor" {
         # Required by Bedrock to verify/complete Anthropic Marketplace subscription
         Sid      = "MarketplaceSubscription"
         Effect   = "Allow"
-        Action   = ["aws-marketplace:ViewSubscriptions", "aws-marketplace:Subscribe"]
+        Action   = ["aws-marketplace:ViewSubscriptions"]
         Resource = "*"
       },
       {
@@ -93,7 +93,7 @@ resource "aws_iam_role_policy" "lambda_processor" {
       {
         Sid    = "LineItemsWrite"
         Effect = "Allow"
-        Action = "dynamodb:PutItem"
+        Action = ["dynamodb:PutItem", "dynamodb:BatchWriteItem"]
         Resource = aws_dynamodb_table.line_items.arn
       },
       {
@@ -142,7 +142,7 @@ resource "aws_iam_role_policy" "lambda_api" {
       {
         Sid    = "DynamoDBReadWrite"
         Effect = "Allow"
-        Action = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"]
+        Action = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:TransactWriteItems"]
         Resource = [
           aws_dynamodb_table.jobs.arn,
           "${aws_dynamodb_table.jobs.arn}/index/*",
@@ -151,7 +151,7 @@ resource "aws_iam_role_policy" "lambda_api" {
       {
         Sid    = "ImageHashesDelete"
         Effect = "Allow"
-        Action = ["dynamodb:GetItem", "dynamodb:DeleteItem"]
+        Action = ["dynamodb:GetItem", "dynamodb:DeleteItem", "dynamodb:TransactWriteItems"]
         Resource = aws_dynamodb_table.image_hashes.arn
       },
       {
@@ -169,7 +169,7 @@ resource "aws_iam_role_policy" "lambda_api" {
         Sid      = "S3PresignedPut"
         Effect   = "Allow"
         Action   = "s3:PutObject"
-        Resource = "${aws_s3_bucket.uploads.arn}/*"
+        Resource = "${aws_s3_bucket.uploads.arn}/uploads/*"
       },
       {
         # GetObject is required to generate presigned GET URLs for debug and cropped image downloads
@@ -177,6 +177,17 @@ resource "aws_iam_role_policy" "lambda_api" {
         Effect = "Allow"
         Action = "s3:GetObject"
         Resource = [
+          "${aws_s3_bucket.uploads.arn}/debug/*",
+          "${aws_s3_bucket.uploads.arn}/cropped/*",
+        ]
+      },
+      {
+        # DeleteObject is required to clean up all S3 objects when a receipt is deleted
+        Sid    = "S3DeleteReceipt"
+        Effect = "Allow"
+        Action = "s3:DeleteObject"
+        Resource = [
+          "${aws_s3_bucket.uploads.arn}/uploads/*",
           "${aws_s3_bucket.uploads.arn}/debug/*",
           "${aws_s3_bucket.uploads.arn}/cropped/*",
         ]

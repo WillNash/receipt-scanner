@@ -11,33 +11,16 @@ class LoginScreen extends ConsumerStatefulWidget {
 }
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
   bool _signingIn = false;
-  bool _obscurePassword = true;
   String? _error;
 
-  @override
-  void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
-
   Future<void> _signIn() async {
-    if (!_formKey.currentState!.validate()) return;
-
     setState(() {
       _signingIn = true;
       _error = null;
     });
-
     try {
-      await ref.read(authProvider.notifier).signIn(
-            _emailController.text.trim(),
-            _passwordController.text,
-          );
+      await ref.read(authProvider.notifier).signIn();
     } on Exception catch (e) {
       if (!mounted) return;
       setState(() => _error = e.toString());
@@ -52,76 +35,41 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
     return Scaffold(
       body: SafeArea(
-        child: SingleChildScrollView(
+        child: Padding(
           padding: const EdgeInsets.all(32),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const SizedBox(height: 48),
-                const Icon(Icons.receipt_long, size: 72),
-                const SizedBox(height: 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Spacer(),
+              const Icon(Icons.receipt_long, size: 72),
+              const SizedBox(height: 24),
+              Text(
+                'Receipt Scanner',
+                style: theme.textTheme.headlineMedium
+                    ?.copyWith(fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 48),
+              if (_error != null) ...[
                 Text(
-                  'Receipt Scanner',
-                  style: theme.textTheme.headlineMedium
-                      ?.copyWith(fontWeight: FontWeight.bold),
+                  _error!,
+                  style: TextStyle(color: theme.colorScheme.error),
                   textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: 48),
-                TextFormField(
-                  controller: _emailController,
-                  decoration: const InputDecoration(
-                    labelText: 'Username',
-                    border: OutlineInputBorder(),
-                  ),
-                  keyboardType: TextInputType.text,
-                  textInputAction: TextInputAction.next,
-                  autocorrect: false,
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? 'Enter your username' : null,
-                ),
                 const SizedBox(height: 16),
-                TextFormField(
-                  controller: _passwordController,
-                  decoration: InputDecoration(
-                    labelText: 'Password',
-                    border: const OutlineInputBorder(),
-                    suffixIcon: IconButton(
-                      icon: Icon(_obscurePassword
-                          ? Icons.visibility_off
-                          : Icons.visibility),
-                      onPressed: () =>
-                          setState(() => _obscurePassword = !_obscurePassword),
-                    ),
-                  ),
-                  obscureText: _obscurePassword,
-                  textInputAction: TextInputAction.done,
-                  onFieldSubmitted: (_) => _signIn(),
-                  validator: (v) =>
-                      (v == null || v.isEmpty) ? 'Enter your password' : null,
-                ),
-                const SizedBox(height: 24),
-                if (_error != null) ...[
-                  Text(
-                    _error!,
-                    style: TextStyle(color: theme.colorScheme.error),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 16),
-                ],
-                FilledButton(
-                  onPressed: _signingIn ? null : _signIn,
-                  child: _signingIn
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Sign in'),
-                ),
               ],
-            ),
+              FilledButton(
+                onPressed: _signingIn ? null : _signIn,
+                child: _signingIn
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Sign in'),
+              ),
+              const Spacer(),
+            ],
           ),
         ),
       ),
