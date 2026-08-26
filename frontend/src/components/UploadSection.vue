@@ -29,7 +29,7 @@ async function selectFiles(files) {
       errors.push(`${file.name} exceeds 20 MB.`)
       continue
     }
-    if (selectedFiles.value.find(s => s.name === file.name && s.size === file.size)) {
+    if (selectedFiles.value.find(s => s.name === file.name && s.size === file.size && s.lastModified === file.lastModified)) {
       errors.push(`${file.name} is already in the queue.`)
     } else {
       selectedFiles.value.push(file)

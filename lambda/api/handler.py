@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import threading
 import urllib.request
 import uuid
 from dataclasses import dataclass
@@ -110,21 +111,31 @@ class _JwksCache:
     def __init__(self):
         self._data: dict | None = None
         self._fetched_at: datetime | None = None
+        self._lock = threading.Lock()
 
     def get(self) -> dict:
         now = datetime.now(timezone.utc)
-        if self._data is None or (
-            self._fetched_at is not None
-            and (now - self._fetched_at).total_seconds() > _JWKS_TTL_SECONDS
+        # Fast path — no lock needed when cache is fresh.
+        if (
+            self._data is not None
+            and self._fetched_at is not None
+            and (now - self._fetched_at).total_seconds() <= _JWKS_TTL_SECONDS
         ):
-            url = (
-                f"https://cognito-idp.{PRIMARY_REGION}.amazonaws.com"
-                f"/{COGNITO_POOL_ID}/.well-known/jwks.json"
-            )
-            with urllib.request.urlopen(url) as resp:
-                self._data = json.loads(resp.read())
-            self._fetched_at = now
-        return self._data
+            return self._data
+        with self._lock:
+            now = datetime.now(timezone.utc)
+            if self._data is None or (
+                self._fetched_at is not None
+                and (now - self._fetched_at).total_seconds() > _JWKS_TTL_SECONDS
+            ):
+                url = (
+                    f"https://cognito-idp.{PRIMARY_REGION}.amazonaws.com"
+                    f"/{COGNITO_POOL_ID}/.well-known/jwks.json"
+                )
+                with urllib.request.urlopen(url) as resp:
+                    self._data = json.loads(resp.read())
+                self._fetched_at = now
+            return self._data
 
 
 # Module-level JWKS cache — refreshed at most once per hour so key rotation
@@ -462,7 +473,10 @@ def handle_edit_receipt(job_id: str | None, user_id: str, body: dict):
         TableName=DYNAMODB_TABLE,
         Key={"job_id": dyn_s(job_id)},
     )
-    return make_response(200, format_receipt(JobRecord.from_dynamo(refreshed["Item"])))
+    item = refreshed.get("Item")
+    if item is None:
+        return make_response(404, {"error": "Job not found after update"})
+    return make_response(200, format_receipt(JobRecord.from_dynamo(item)))
 
 
 def _replace_line_items(job_id: str, user_id: str, job: JobRecord, created_at: str, new_items: list) -> None:

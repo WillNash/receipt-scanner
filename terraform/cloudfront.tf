@@ -70,14 +70,9 @@ resource "aws_cloudfront_distribution" "frontend" {
     max_ttl     = 86400
   }
 
-  # SPA routing: return index.html for 403/404 so client-side routing works
-  custom_error_response {
-    error_code            = 403
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
-  }
-
+  # SPA routing: return index.html for true 404s so client-side routing works.
+  # 403 is NOT remapped — it indicates a real access-denied (e.g. direct S3 key
+  # access) and should surface as an error rather than silently serving index.html.
   custom_error_response {
     error_code            = 404
     response_code         = 200

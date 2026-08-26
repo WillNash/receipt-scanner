@@ -112,7 +112,11 @@ class UploadNotifier extends Notifier<List<PhotoUpload>> {
 
   Future<void> uploadAll() async {
     final pending = state.where((u) => u.status == UploadStatus.idle).toList();
-    await Future.wait(pending.map((u) => _uploadOne(u.id)));
+    const batchSize = 3;
+    for (var i = 0; i < pending.length; i += batchSize) {
+      final batch = pending.sublist(i, (i + batchSize).clamp(0, pending.length));
+      await Future.wait(batch.map((u) => _uploadOne(u.id)));
+    }
   }
 
   Future<void> _uploadOne(String id) async {

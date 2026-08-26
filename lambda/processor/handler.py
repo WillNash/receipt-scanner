@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote_plus
@@ -25,6 +26,13 @@ from bedrock_extraction import (
     _fix_weighted_item_prices,
     _compute_net_prices,
 )
+
+class _TransientError(Exception):
+    """Signal an SQS retry without marking the job FAILED."""
+
+
+_S3_KEY_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
+
 
 @dataclass
 class ReceiptAnalysis:
@@ -82,8 +90,14 @@ def process_record(record):
         parts = key.split("/")
         job_id = parts[2].rsplit(".", 1)[0] if len(parts) >= 3 else key
 
+        if not _S3_KEY_RE.match(job_id):
+            print(f"SKIP unexpected S3 key format: {key}")
+            continue
+
         try:
             _process_s3_record(bucket, key, job_id)
+        except _TransientError:
+            raise
         except Exception:
             _mark_job_failed(job_id)
             raise
@@ -101,13 +115,15 @@ def _mark_job_failed(job_id: str) -> None:
 
 def _process_s3_record(bucket: str, key: str, job_id: str) -> None:
     existing = get_job(dynamodb, DYNAMODB_TABLE, job_id)
-    if existing and existing["status"] == "COMPLETE":
+    if existing is None:
+        raise _TransientError(f"Job {job_id} not in DynamoDB yet — will retry")
+    if existing["status"] == "COMPLETE":
         print(f"Job {job_id} already COMPLETE — skipping")
         return
 
-    user_id = (existing or {}).get("user_id") or "unknown"
-    user_email = (existing or {}).get("email") or ""
-    created_at = (existing or {}).get("created_at") or now_iso()
+    user_id = existing.get("user_id") or "unknown"
+    user_email = existing.get("email") or ""
+    created_at = existing.get("created_at") or now_iso()
 
     update_job(dynamodb, DYNAMODB_TABLE, job_id, {
         "status": dyn_s("PROCESSING"),
@@ -116,8 +132,9 @@ def _process_s3_record(bucket: str, key: str, job_id: str) -> None:
 
     image_data = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
     image_hash = hashlib.sha256(image_data).hexdigest()
+    expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
 
-    prior_job_id = lookup_image_hash(user_id, image_hash)
+    prior_job_id = _claim_image_hash(user_id, image_hash, job_id, expiry)
     if prior_job_id:
         prior = get_job(dynamodb, DYNAMODB_TABLE, prior_job_id)
         prior_status = prior["status"] if prior else None
@@ -133,7 +150,6 @@ def _process_s3_record(bucket: str, key: str, job_id: str) -> None:
 
     result = analyze_receipt(bucket, key, job_id, user_id, image_data=image_data)
 
-    expiry = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
     update_job(dynamodb, DYNAMODB_TABLE, job_id, {
         "status": dyn_s("COMPLETE"),
         "store_category": dyn_s(result.store_category),
@@ -150,8 +166,6 @@ def _process_s3_record(bucket: str, key: str, job_id: str) -> None:
         "updated_at": dyn_s(now_iso()),
         "expires_at": dyn_n(expiry),
     })
-
-    store_image_hash(user_id, image_hash, job_id, expiry)
 
     if LINE_ITEMS_TABLE:
         ctx = LineItemContext(
@@ -276,27 +290,27 @@ def save_debug(job_id: str, user_id: str, payload: dict, suffix: str = "") -> st
     return debug_key
 
 
-def lookup_image_hash(user_id: str, image_hash: str) -> str | None:
+def _claim_image_hash(user_id: str, image_hash: str, job_id: str, expires_at: int) -> str | None:
+    """Atomically claim the hash for job_id. Returns the prior job_id if already taken."""
     if not IMAGE_HASHES_TABLE:
         return None
-    resp = dynamodb.get_item(
-        TableName=IMAGE_HASHES_TABLE,
-        Key={"user_id": {"S": user_id}, "image_hash": {"S": image_hash}},
-    )
-    return resp.get("Item", {}).get("job_id", {}).get("S")
-
-
-def store_image_hash(user_id: str, image_hash: str, job_id: str, expires_at: int) -> None:
-    if not IMAGE_HASHES_TABLE:
-        return
-    dynamodb.put_item(
-        TableName=IMAGE_HASHES_TABLE,
-        Item={
-            "user_id":    dyn_s(user_id),
-            "image_hash": dyn_s(image_hash),
-            "job_id":     dyn_s(job_id),
-            "expires_at": dyn_n(expires_at),
-        },
-    )
+    try:
+        dynamodb.put_item(
+            TableName=IMAGE_HASHES_TABLE,
+            Item={
+                "user_id":    dyn_s(user_id),
+                "image_hash": dyn_s(image_hash),
+                "job_id":     dyn_s(job_id),
+                "expires_at": dyn_n(expires_at),
+            },
+            ConditionExpression="attribute_not_exists(image_hash)",
+        )
+        return None
+    except dynamodb.exceptions.ConditionalCheckFailedException:
+        resp = dynamodb.get_item(
+            TableName=IMAGE_HASHES_TABLE,
+            Key={"user_id": dyn_s(user_id), "image_hash": dyn_s(image_hash)},
+        )
+        return resp.get("Item", {}).get("job_id", {}).get("S")
 
 

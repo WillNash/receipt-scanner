@@ -81,7 +81,7 @@ resource "aws_iam_role_policy" "lambda_processor" {
         # Required by Bedrock to verify/complete Anthropic Marketplace subscription
         Sid      = "MarketplaceSubscription"
         Effect   = "Allow"
-        Action   = ["aws-marketplace:ViewSubscriptions", "aws-marketplace:Subscribe"]
+        Action   = ["aws-marketplace:ViewSubscriptions"]
         Resource = "*"
       },
       {

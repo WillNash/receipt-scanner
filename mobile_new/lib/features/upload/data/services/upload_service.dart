@@ -74,7 +74,9 @@ class UploadService {
   }
 
   static String contentTypeFor(String filePath) {
-    final ext = '.${filePath.split('.').last.toLowerCase()}';
-    return ext == '.png' ? 'image/png' : 'image/jpeg';
+    final ext = filePath.split('.').last.toLowerCase();
+    if (ext == 'png') return 'image/png';
+    if (ext == 'jpg' || ext == 'jpeg') return 'image/jpeg';
+    throw ArgumentError('Unsupported file extension: .$ext');
   }
 }

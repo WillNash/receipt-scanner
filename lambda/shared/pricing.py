@@ -36,10 +36,14 @@ def check_price_sum(items: list, total_str: str) -> dict:
 
     item_prices = []
     for i, item in enumerate(items):
-        p = to_float(item.get("price"))
+        price_raw = item.get("price")
+        if price_raw is None:
+            result["unparseable_indices"].append(i)
+            continue
+        p = to_float(price_raw)
         if p is not None:
             item_prices.append(p)
-        elif item.get("price"):
+        else:
             result["unparseable_indices"].append(i)
 
     items_sum = round(sum(item_prices), 2)

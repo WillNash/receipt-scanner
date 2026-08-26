@@ -79,11 +79,16 @@ def write_line_items(
     print(f"LINE_ITEMS_WRITTEN job={ctx.job_id} count={len(records)}")
 
 
+_MAX_RETRIES = 3
+
+
 def _batch_put(dynamodb, table_name: str, records: list) -> None:
-    """Write records in batches of 25, retrying any UnprocessedItems."""
+    """Write records in batches of 25, retrying any UnprocessedItems up to 3 times."""
     for i in range(0, len(records), _BATCH_SIZE):
         pending = records[i:i + _BATCH_SIZE]
-        while pending:
+        for _ in range(_MAX_RETRIES):
+            if not pending:
+                break
             resp = dynamodb.batch_write_item(
                 RequestItems={
                     table_name: [{"PutRequest": {"Item": r}} for r in pending]
@@ -93,3 +98,5 @@ def _batch_put(dynamodb, table_name: str, records: list) -> None:
                 req["PutRequest"]["Item"]
                 for req in resp.get("UnprocessedItems", {}).get(table_name, [])
             ]
+        if pending:
+            raise RuntimeError(f"_batch_put: {len(pending)} items still unprocessed after {_MAX_RETRIES} attempts")
