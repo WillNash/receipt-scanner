@@ -13,10 +13,11 @@ def group_blocks(blocks: list) -> tuple[list[list], float, float]:
     Y_observed = Y_true + a*X^2 + b*X.  For any same-row pair (A, B):
       (Y_B - Y_A) / (X_B - X_A) = a*(X_A + X_B) + b
     Collect candidate same-row pairs (B to the right of A by ≥ 15%, Y-gap ≤
-    1.5 × line_height) and fit the line  slope = a*sum_X + b  via Theil-Sen
-    regression.  The de-curled coordinate y_flat(b) = Y(b) - a*X(b)^2 - b*X(b)
-    is used for all subsequent Y comparisons.  For a flat receipt (a=b=0)
-    y_flat degrades to the raw Y.
+    1.5 × line_height).  Apply LMS (minimum-range half-sample) to find the
+    tightest slope cluster, then fit slope = a*sum_X + b via Theil-Sen on pairs
+    with |Δsum_X| > 0.15.  The de-curled coordinate y_flat(b) = Y(b) -
+    a*X(b)^2 - b*X(b) is used for all subsequent Y comparisons.  For a flat
+    receipt (a=b=0) y_flat degrades to the raw Y.
 
     Phase 3 — Mark multi-buy anchors: scan for quantity-indicator blocks
     (text like "2@", "4 @") and mark the description row immediately above each
@@ -66,16 +67,30 @@ def group_blocks(blocks: list) -> tuple[list[list], float, float]:
 
     curl_a, curl_b = 0.0, 0.0
     if len(cand) >= 3:
+        raw_slopes = sorted(s for _, s in cand)
+        n = len(raw_slopes)
+        k = max(3, (n + 1) // 2)
+        # LMS: minimum-range half-sample isolates the tightest slope cluster.
+        best_range, best_i = float("inf"), 0
+        for i in range(n - k + 1):
+            r = raw_slopes[i + k - 1] - raw_slopes[i]
+            if r < best_range:
+                best_range, best_i = r, i
+        s_lo, s_hi = raw_slopes[best_i], raw_slopes[best_i + k - 1]
+        dense = [(sx, s) for sx, s in cand if s_lo <= s <= s_hi]
+        # Theil-Sen on the dense cluster for the parabolic coefficient.
+        # Require |Δsum_X| > 0.15 so only pairs at meaningfully different X
+        # positions contribute; otherwise curl_a stays 0 (linear model).
         ts_a_vals = []
-        for i in range(len(cand)):
-            for j in range(i + 1, len(cand)):
-                d_sx = cand[j][0] - cand[i][0]
-                if abs(d_sx) < 0.05:
+        for i in range(len(dense)):
+            for j in range(i + 1, len(dense)):
+                d_sx = dense[j][0] - dense[i][0]
+                if abs(d_sx) < 0.15:
                     continue
-                ts_a_vals.append((cand[j][1] - cand[i][1]) / d_sx)
+                ts_a_vals.append((dense[j][1] - dense[i][1]) / d_sx)
         if ts_a_vals:
             curl_a = sorted(ts_a_vals)[len(ts_a_vals) // 2]
-        residuals = sorted(s - curl_a * sx for sx, s in cand)
+        residuals = sorted(s - curl_a * sx for sx, s in dense)
         curl_b = residuals[len(residuals) // 2]
 
     def _flat(b):
@@ -140,8 +155,7 @@ def group_blocks(blocks: list) -> tuple[list[list], float, float]:
         for j, other in enumerate(rows):
             if j == i or id(other[0]) in no_price_ids:
                 continue
-            other_y = sum(_flat(b) for b in other) / len(other)
-            gap = abs(other_y - orphan_y)
+            gap = min(abs(_flat(b) - orphan_y) for b in other)
             if gap <= step_tol * 2 and gap < best_gap:
                 best_gap, best_j = gap, j
         if best_j is None:
