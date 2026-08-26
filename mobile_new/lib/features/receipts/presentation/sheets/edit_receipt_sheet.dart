@@ -14,6 +14,7 @@ class EditableItem {
     String discount = '',
     this.itemCategory,
     this.novaGroup,
+    this.lineTotal,
   })  : descCtrl = TextEditingController(text: desc),
         qtyCtrl = TextEditingController(text: qty),
         packageSizeCtrl = TextEditingController(text: packageSize),
@@ -30,6 +31,7 @@ class EditableItem {
         discount: item.discount ?? '',
         itemCategory: item.itemCategory,
         novaGroup: item.novaGroup,
+        lineTotal: item.lineTotal,
       );
 
   final TextEditingController descCtrl;
@@ -40,6 +42,7 @@ class EditableItem {
   final TextEditingController discountCtrl;
   final String? itemCategory;
   final int? novaGroup;
+  final String? lineTotal;
 
   void dispose() {
     descCtrl.dispose();
@@ -62,6 +65,7 @@ class EditableItem {
     if (up.isNotEmpty) map['unit_price'] = up;
     if (price.isNotEmpty) map['price'] = price;
     if (discount.isNotEmpty) map['discount'] = discount;
+    if (lineTotal != null) map['line_total'] = lineTotal;
     if (itemCategory != null) map['item_category'] = itemCategory;
     if (novaGroup != null) map['nova_group'] = novaGroup;
     return map;

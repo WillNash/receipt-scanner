@@ -89,8 +89,9 @@ async function save() {
     emit('saved')
     emit('close')
   } catch (err) {
-    saving.value = false
     saveError.value = 'Failed to save: ' + err.message
+  } finally {
+    saving.value = false
   }
 }
 </script>

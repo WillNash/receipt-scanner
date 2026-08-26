@@ -5,6 +5,7 @@ class LineItem {
     this.packageSize,
     this.unitPrice,
     this.price,
+    this.lineTotal,
     this.discount,
     this.itemCategory,
     this.novaGroup,
@@ -15,6 +16,7 @@ class LineItem {
   final String? packageSize;
   final String? unitPrice;
   final String? price;
+  final String? lineTotal;
   final String? discount;
   final String? itemCategory;
   final int? novaGroup;
@@ -25,6 +27,7 @@ class LineItem {
         packageSize: json['package_size'] as String?,
         unitPrice: json['unit_price'] as String?,
         price: json['price'] as String?,
+        lineTotal: json['line_total'] as String?,
         discount: json['discount'] as String?,
         itemCategory: json['item_category'] as String?,
         novaGroup: json['nova_group'] as int?,
