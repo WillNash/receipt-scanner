@@ -23,15 +23,6 @@ class TextractResult:
 
 
 def _textract_lines(image_bytes: bytes) -> TextractResult:
-    """Run Textract DetectDocumentText and return a TextractResult.
-
-    Two-phase algorithm:
-    1. Calibrate: derive the receipt's line height from the distribution of
-       consecutive Y-gaps, avoiding any hardcoded page-fraction threshold.
-    2. Chain: pop the leftmost unassigned block, then walk right — each step
-       uses a rolling Y-tolerance anchored to the current block, so the window
-       follows any curvature rather than drifting from the row's origin.
-    """
     resp = textract.detect_document_text(Document={"Bytes": image_bytes})
     all_blocks = resp["Blocks"]
     blocks = [b for b in all_blocks if b["BlockType"] == "LINE"]
@@ -40,8 +31,8 @@ def _textract_lines(image_bytes: bytes) -> TextractResult:
     if not blocks:
         return TextractResult(text="", lines=[], blocks=[], words=[], rows=[], line_height=0.0, step_tol=0.0)
 
-    rows, line_height, step_tol = group_blocks(blocks)
-    lines = ["  ".join(b["Text"] for b in row) for row in rows]
+    rows, line_height, step_tol = group_blocks(words)
+    lines = [" ".join(b["Text"] for b in row) for row in rows]
     print(f"TEXTRACT lines={len(lines)} line_height={line_height:.4f} step_tol={step_tol:.4f}")
     return TextractResult(
         text="\n".join(lines),
@@ -54,20 +45,29 @@ def _textract_lines(image_bytes: bytes) -> TextractResult:
     )
 
 
-def _debug_block_list(blocks: list, rows: list) -> list:
-    """Slim Textract LINE blocks down to JSON-serialisable dicts, annotated with row index.
+def _debug_block_list(blocks: list, word_rows: list) -> list:
+    """Slim Textract LINE blocks down to JSON-serialisable dicts.
 
-    Blocks are in reading order (sorted by Top). The row index shows which blocks
-    were merged together by our ROW_GAP grouping: same row index = same merged line.
+    Row index is assigned via each LINE block's first child word in the
+    word-based grouping, so blocks that share a word row share an index.
     """
-    id_to_row = {}
-    for row_idx, row_blocks in enumerate(rows):
-        for block in row_blocks:
-            id_to_row[block["Id"]] = row_idx
+    word_id_to_row: dict[str, int] = {}
+    for row_idx, row_words in enumerate(word_rows):
+        for word in row_words:
+            word_id_to_row[word["Id"]] = row_idx
 
     result = []
     for block in blocks:
         bb = block["Geometry"]["BoundingBox"]
+        line_row = -1
+        for rel in block.get("Relationships", []):
+            if rel["Type"] == "CHILD":
+                for wid in rel["Ids"]:
+                    if wid in word_id_to_row:
+                        line_row = word_id_to_row[wid]
+                        break
+                if line_row != -1:
+                    break
         result.append({
             "text":       block.get("Text", ""),
             "confidence": round(block.get("Confidence", 0), 1),
@@ -75,34 +75,24 @@ def _debug_block_list(blocks: list, rows: list) -> list:
             "left":       round(bb["Left"],   4),
             "width":      round(bb["Width"],  4),
             "height":     round(bb["Height"], 4),
-            "row":        id_to_row.get(block["Id"], -1),
+            "row":        line_row,
         })
     return result
 
 
-def _debug_word_list(words: list, line_blocks: list, rows: list) -> list:
-    """Slim Textract WORD blocks down to JSON-serialisable dicts.
+def _debug_word_list(words: list, word_rows: list) -> list:
+    """Slim Textract WORD blocks, annotated with their word-based row index.
 
-    Each word is annotated with the row index of its parent LINE block so you
-    can see whether its physical position matches where the grouping placed it.
     Words are sorted by Top so they read top-to-bottom in the debug output.
     """
-    word_to_line: dict[str, str] = {}
-    for line in line_blocks:
-        for rel in line.get("Relationships", []):
-            if rel["Type"] == "CHILD":
-                for wid in rel["Ids"]:
-                    word_to_line[wid] = line["Id"]
-
-    id_to_row: dict[str, int] = {}
-    for row_idx, row_blocks in enumerate(rows):
-        for block in row_blocks:
-            id_to_row[block["Id"]] = row_idx
+    word_id_to_row: dict[str, int] = {}
+    for row_idx, row_words in enumerate(word_rows):
+        for word in row_words:
+            word_id_to_row[word["Id"]] = row_idx
 
     result = []
     for word in sorted(words, key=lambda b: b["Geometry"]["BoundingBox"]["Top"]):
         bb = word["Geometry"]["BoundingBox"]
-        parent_line_id = word_to_line.get(word["Id"])
         result.append({
             "text":       word.get("Text", ""),
             "confidence": round(word.get("Confidence", 0), 1),
@@ -110,6 +100,6 @@ def _debug_word_list(words: list, line_blocks: list, rows: list) -> list:
             "left":       round(bb["Left"],   4),
             "width":      round(bb["Width"],  4),
             "height":     round(bb["Height"], 4),
-            "row":        id_to_row.get(parent_line_id, -1),
+            "row":        word_id_to_row.get(word["Id"], -1),
         })
     return result
