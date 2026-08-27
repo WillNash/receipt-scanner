@@ -51,7 +51,7 @@ def group_blocks(blocks: list) -> tuple[list[list], float, float]:
     # Phase 2 — estimate parabolic curl deformation
     # For a same-row pair (A, B) with X_B > X_A:
     #   slope_AB = (Y_B - Y_A) / (X_B - X_A) = a*(X_A + X_B) + b
-    # Collect candidate pairs and fit slope = a*sum_X + b via Theil-Sen.
+    # Collect candidate same-row pairs and fit slope = a*sum_X + b via Theil-Sen.
     cand = []
     for A in blocks:
         for B in blocks:
