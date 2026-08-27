@@ -57,7 +57,8 @@ const rowGroupingText = computed(() => {
 })
 
 const blocks = computed(() => data.value?.blocks || [])
-const lines = computed(() => data.value?.lines || [])
+const words  = computed(() => data.value?.words  || [])
+const lines  = computed(() => data.value?.lines  || [])
 
 const blocksHeading = computed(() => {
   if (!blocks.value.length) return ''
@@ -65,19 +66,24 @@ const blocksHeading = computed(() => {
   return `Textract blocks — ${blocks.value.length} blocks → ${rowCount} rows`
 })
 
-// Build display rows: interleave block rows with separator markers
-const blockDisplayRows = computed(() => {
+const wordsHeading = computed(() =>
+  words.value.length ? `Textract words — ${words.value.length} words` : ''
+)
+
+// Build display rows: interleave entries with separator markers between rows
+function toDisplayRows(items) {
   const rows = []
   let lastRow = -1
-  for (const block of blocks.value) {
-    if (block.row !== lastRow && lastRow !== -1) {
-      rows.push({ isSep: true })
-    }
-    lastRow = block.row
-    rows.push({ isSep: false, block })
+  for (const item of items) {
+    if (item.row !== lastRow && lastRow !== -1) rows.push({ isSep: true })
+    lastRow = item.row
+    rows.push({ isSep: false, item })
   }
   return rows
-})
+}
+
+const blockDisplayRows = computed(() => toDisplayRows(blocks.value))
+const wordDisplayRows  = computed(() => toDisplayRows(words.value))
 
 onMounted(async () => {
   try {
@@ -156,14 +162,31 @@ function downloadTestFixture() {
         <table class="debug-blocks-table">
           <tbody>
             <template v-for="(row, idx) in blockDisplayRows" :key="idx">
-              <tr v-if="row.isSep" class="debug-row-sep">
-                <td colspan="3"></td>
-              </tr>
-              <tr v-else :class="{ 'debug-block--low-conf': row.block.confidence < 85 }">
-                <td class="debug-block-conf">{{ row.block.confidence.toFixed(0) }}%</td>
-                <td class="debug-block-text">{{ row.block.text }}</td>
+              <tr v-if="row.isSep" class="debug-row-sep"><td colspan="3"></td></tr>
+              <tr v-else :class="{ 'debug-block--low-conf': row.item.confidence < 85 }">
+                <td class="debug-block-conf">{{ row.item.confidence.toFixed(0) }}%</td>
+                <td class="debug-block-text">{{ row.item.text }}</td>
                 <td class="debug-block-pos">
-                  ↕{{ (row.block.top * 100).toFixed(1) }}% ←{{ Math.round(row.block.left * 100) }}%
+                  ↕{{ (row.item.top * 100).toFixed(1) }}% ←{{ Math.round(row.item.left * 100) }}%
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </template>
+
+      <!-- Words table -->
+      <template v-if="words.length">
+        <div class="debug-lines-heading" style="margin-top:0.6rem">{{ wordsHeading }}</div>
+        <table class="debug-blocks-table">
+          <tbody>
+            <template v-for="(row, idx) in wordDisplayRows" :key="idx">
+              <tr v-if="row.isSep" class="debug-row-sep"><td colspan="3"></td></tr>
+              <tr v-else :class="{ 'debug-block--low-conf': row.item.confidence < 85 }">
+                <td class="debug-block-conf">{{ row.item.confidence.toFixed(0) }}%</td>
+                <td class="debug-block-text">{{ row.item.text }}</td>
+                <td class="debug-block-pos">
+                  ↕{{ (row.item.top * 100).toFixed(1) }}% ←{{ Math.round(row.item.left * 100) }}%
                 </td>
               </tr>
             </template>
