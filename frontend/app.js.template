@@ -740,6 +740,45 @@ async function toggleOcrDebug(btn, url, card, jobId) {
       panel.appendChild(table);
     }
 
+    // ── Words table (individual word bounding boxes) ─────────────────────────
+    const words = data.words;
+    if (words && words.length > 0) {
+      const wHeading = document.createElement("div");
+      wHeading.className = "debug-lines-heading";
+      wHeading.style.marginTop = "0.6rem";
+      wHeading.textContent = `Textract words — ${words.length} words`;
+      panel.appendChild(wHeading);
+
+      const wtable = document.createElement("table");
+      wtable.className = "debug-blocks-table";
+
+      let lastWordRow = -1;
+      words.forEach(word => {
+        if (word.row !== lastWordRow && lastWordRow !== -1) {
+          const sep = wtable.insertRow();
+          sep.className = "debug-row-sep";
+          sep.insertCell().colSpan = 3;
+        }
+        lastWordRow = word.row;
+
+        const tr = wtable.insertRow();
+        if (word.confidence < 85) tr.className = "debug-block--low-conf";
+
+        const confTd = tr.insertCell();
+        confTd.className = "debug-block-conf";
+        confTd.textContent = `${word.confidence.toFixed(0)}%`;
+
+        const textTd = tr.insertCell();
+        textTd.className = "debug-block-text";
+        textTd.textContent = word.text;
+
+        const posTd = tr.insertCell();
+        posTd.className = "debug-block-pos";
+        posTd.textContent = `↕${(word.top * 100).toFixed(1)}% ←${(word.left * 100).toFixed(0)}%`;
+      });
+      panel.appendChild(wtable);
+    }
+
     // ── Merged lines (what Claude receives) ───────────────────────────────────
     const lines = data.lines || [];
     if (lines.length > 0) {
