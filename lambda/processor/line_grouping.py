@@ -26,11 +26,15 @@ def group_blocks(blocks: list) -> tuple[list[list], float, float]:
     Phase 4 — Chain: pop the leftmost unassigned block, then walk right picking
     the horizontally nearest block within step_tol of the current tail's y_flat.
     The tolerance resets to each newly added block's y_flat so it follows
-    residual row curvature.  No-price anchors skip right-edge blocks (left > 65%).
+    residual row curvature.  No-price anchors skip right-edge blocks (left > price_col).
 
     Phase 5 — Absorb price orphans: single-block rows whose block sits in the
-    right-hand price column (X > 65%) are merged into the nearest other row
+    right-hand price column (X > price_col) are merged into the nearest other row
     within 2 × step_tol in y_flat space.  No-price anchor rows are excluded.
+
+    price_col is derived from the largest gap in the X distribution that falls
+    past the 35% mark, so it adapts to wider formats (A4, landscape) without
+    manual tuning.  Falls back to 0.65 when no clear gap is found.
 
     Returns (rows, line_height, step_tol) where rows is a list of block lists
     in top-to-bottom reading order.
@@ -47,6 +51,17 @@ def group_blocks(blocks: list) -> tuple[list[list], float, float]:
     large_gaps = sorted(g for g in gaps if g >= 0.005)
     line_height = large_gaps[len(large_gaps) // 2] if large_gaps else 0.012
     step_tol = line_height * 0.4
+
+    # Derive price-column boundary from the largest gap in the X distribution
+    # that falls past the 35% mark.  Falls back to 0.65 on sparse receipts.
+    xs = sorted(_left(b) for b in blocks)
+    price_col = 0.65
+    _max_gap = 0.10
+    for i in range(len(xs) - 1):
+        gap = xs[i + 1] - xs[i]
+        if gap > _max_gap and xs[i] > 0.35:
+            _max_gap = gap
+            price_col = (xs[i] + xs[i + 1]) / 2
 
     # Phase 2 — estimate parabolic curl deformation
     # For a same-row pair (A, B) with X_B > X_A:
@@ -100,14 +115,14 @@ def group_blocks(blocks: list) -> tuple[list[list], float, float]:
     # Phase 3 — mark multi-buy anchor rows (uses y_flat for Y comparisons)
     qty_indicators = [
         b for b in blocks
-        if _QTY_RE.match(b.get("Text", "")) and 0.20 <= _left(b) <= 0.55
+        if _QTY_RE.match(b.get("Text", "")) and 0.20 <= _left(b) < price_col
     ]
     no_price_ids: set[int] = set()
     for qb in qty_indicators:
         qy = _flat(qb)
         best_b, best_gap = None, float("inf")
         for b in blocks:
-            if b is qb or _left(b) > 0.30:
+            if b is qb or _left(b) >= _left(qb):
                 continue
             gap = qy - _flat(b)
             if 0 < gap < line_height * 3 and gap < best_gap:
@@ -131,7 +146,7 @@ def group_blocks(blocks: list) -> tuple[list[list], float, float]:
                 bx = _left(b)
                 if bx <= cur_x:
                     continue
-                if anchor_no_price and bx > 0.65:
+                if anchor_no_price and bx > price_col:
                     continue
                 if abs(_flat(b) - cur_y) <= step_tol:
                     dx = bx - cur_x
@@ -147,7 +162,7 @@ def group_blocks(blocks: list) -> tuple[list[list], float, float]:
     # Phase 5 — absorb isolated right-edge price blocks
     i = 0
     while i < len(rows):
-        if len(rows[i]) != 1 or _left(rows[i][0]) <= 0.65:
+        if len(rows[i]) != 1 or _left(rows[i][0]) <= price_col:
             i += 1
             continue
         orphan_y = _flat(rows[i][0])
