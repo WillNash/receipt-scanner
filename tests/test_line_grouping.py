@@ -25,8 +25,34 @@ def _block(text, top_pct, left_pct):
     }
 
 
+def _word(text, top_pct, left_pct):
+    """Build a minimal Textract WORD block dict from percentage coordinates.
+
+    Used by fixtures downloaded from the debug panel after switching to
+    word-based grouping (group_blocks now runs on WORD blocks, not LINEs).
+    """
+    return {
+        "BlockType": "WORD",
+        "Text": text,
+        "Geometry": {
+            "BoundingBox": {
+                "Top":    top_pct  / 100,
+                "Left":   left_pct / 100,
+                "Width":  0.05,
+                "Height": 0.008,
+            }
+        },
+    }
+
+
 def _lines(rows):
+    """Join LINE-block rows with double space (legacy LINE-based fixtures)."""
     return ["  ".join(b["Text"] for b in row) for row in rows]
+
+
+def _word_lines(rows):
+    """Join WORD-block rows with single space (word-based fixtures)."""
+    return [" ".join(b["Text"] for b in row) for row in rows]
 
 
 # ---------------------------------------------------------------------------

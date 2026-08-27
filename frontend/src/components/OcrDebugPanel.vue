@@ -99,17 +99,17 @@ onMounted(async () => {
 })
 
 function downloadTestFixture() {
-  const blockList = data.value?.blocks || []
+  const wordList = data.value?.words || []
   const lineList = data.value?.lines || []
 
-  const maxTextLen = Math.max(...blockList.map(b => b.text.length), 0)
+  const maxTextLen = Math.max(...wordList.map(w => w.text.length), 0)
 
-  const blockLines = blockList.map(b => {
-    const escaped = b.text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-    const topPct = (b.top * 100).toFixed(1)
-    const leftPct = Math.round(b.left * 100)
-    const pad = ' '.repeat(maxTextLen - b.text.length)
-    return `    _block("${escaped}",${pad}  ${topPct.padStart(5)},  ${String(leftPct).padStart(2)}),`
+  const wordLines = wordList.map(w => {
+    const escaped = w.text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    const topPct = (w.top * 100).toFixed(1)
+    const leftPct = Math.round(w.left * 100)
+    const pad = ' '.repeat(maxTextLen - w.text.length)
+    return `    _word("${escaped}",${pad}  ${topPct.padStart(5)},  ${String(leftPct).padStart(2)}),`
   })
 
   const expectedLines = lineList.map(l => {
@@ -121,11 +121,11 @@ function downloadTestFixture() {
   const rowCount = lineList.length
 
   const content = [
-    `# ${blockList.length} blocks → ${rowCount} rows`,
+    `# ${wordList.length} words → ${rowCount} rows`,
     `# job_id: ${props.jobId || 'unknown'}`,
     ``,
-    `BLOCKS = [`,
-    ...blockLines,
+    `WORDS = [`,
+    ...wordLines,
     `]`,
     ``,
     `EXPECTED = [`,
