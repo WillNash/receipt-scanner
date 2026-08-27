@@ -98,6 +98,17 @@ onMounted(async () => {
   }
 })
 
+async function downloadTextractJson() {
+  const resp = await fetch(props.url)
+  const blob = await resp.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `textract_${(props.jobId || 'unknown').slice(0, 8)}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 function downloadTestFixture() {
   const wordList = data.value?.words || []
   const lineList = data.value?.lines || []
@@ -205,7 +216,10 @@ function downloadTestFixture() {
       </template>
 
       <!-- Download test fixture -->
-      <button class="btn btn-secondary" style="margin-top:0.75rem;font-size:0.75rem;" @click="downloadTestFixture">
+      <button class="btn btn-secondary" style="margin-top:0.75rem;font-size:0.75rem;" @click="downloadTextractJson">
+        Download textract JSON
+      </button>
+      <button class="btn btn-secondary" style="margin-top:0.75rem;font-size:0.75rem;margin-left:0.5rem;" @click="downloadTestFixture">
         Download test fixture (.py)
       </button>
     </template>
