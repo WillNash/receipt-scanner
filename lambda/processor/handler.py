@@ -18,7 +18,7 @@ from image_processing import (
     _deskew_image,
     crop_receipt,
 )
-from textract_pipeline import TextractResult, _textract_lines, _debug_block_list
+from textract_pipeline import TextractResult, _textract_lines, _debug_block_list, _debug_word_list
 from bedrock_extraction import (
     BEDROCK_MODEL_ID,
     _run_bedrock,
@@ -226,6 +226,7 @@ def _save_debug_payloads(
             "step_tol": round(tr.step_tol, 4),
         },
         "blocks": _debug_block_list(tr.blocks, tr.rows),
+        "words":  _debug_word_list(tr.words, tr.rows),
         "lines": tr.lines,
     }, suffix="_textract")
     claude_debug_key = save_debug(job_id, user_id, {
@@ -248,7 +249,10 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
         raw = image_data or s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         data = _to_jpeg(raw)
 
-    _, tr, skew, correction, deskew_applied = _run_deskew_pipeline(data, SKEW_THRESHOLD)
+    final_data, tr, skew, correction, deskew_applied = _run_deskew_pipeline(data, SKEW_THRESHOLD)
+
+    if deskew_applied and cropped_key:
+        s3.put_object(Bucket=bucket, Key=cropped_key, Body=final_data, ContentType="image/jpeg")
 
     extracted, usage = _run_bedrock(tr.text)
 

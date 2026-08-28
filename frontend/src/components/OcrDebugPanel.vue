@@ -57,7 +57,8 @@ const rowGroupingText = computed(() => {
 })
 
 const blocks = computed(() => data.value?.blocks || [])
-const lines = computed(() => data.value?.lines || [])
+const words  = computed(() => data.value?.words  || [])
+const lines  = computed(() => data.value?.lines  || [])
 
 const blocksHeading = computed(() => {
   if (!blocks.value.length) return ''
@@ -65,19 +66,24 @@ const blocksHeading = computed(() => {
   return `Textract blocks — ${blocks.value.length} blocks → ${rowCount} rows`
 })
 
-// Build display rows: interleave block rows with separator markers
-const blockDisplayRows = computed(() => {
+const wordsHeading = computed(() =>
+  words.value.length ? `Textract words — ${words.value.length} words` : ''
+)
+
+// Build display rows: interleave entries with separator markers between rows
+function toDisplayRows(items) {
   const rows = []
   let lastRow = -1
-  for (const block of blocks.value) {
-    if (block.row !== lastRow && lastRow !== -1) {
-      rows.push({ isSep: true })
-    }
-    lastRow = block.row
-    rows.push({ isSep: false, block })
+  for (const item of items) {
+    if (item.row !== lastRow && lastRow !== -1) rows.push({ isSep: true })
+    lastRow = item.row
+    rows.push({ isSep: false, item })
   }
   return rows
-})
+}
+
+const blockDisplayRows = computed(() => toDisplayRows(blocks.value))
+const wordDisplayRows  = computed(() => toDisplayRows(words.value))
 
 onMounted(async () => {
   try {
@@ -92,18 +98,29 @@ onMounted(async () => {
   }
 })
 
+async function downloadTextractJson() {
+  const resp = await fetch(props.url)
+  const blob = await resp.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `textract_${(props.jobId || 'unknown').slice(0, 8)}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 function downloadTestFixture() {
-  const blockList = data.value?.blocks || []
+  const wordList = data.value?.words || []
   const lineList = data.value?.lines || []
 
-  const maxTextLen = Math.max(...blockList.map(b => b.text.length), 0)
+  const maxTextLen = Math.max(...wordList.map(w => w.text.length), 0)
 
-  const blockLines = blockList.map(b => {
-    const escaped = b.text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-    const topPct = (b.top * 100).toFixed(1)
-    const leftPct = Math.round(b.left * 100)
-    const pad = ' '.repeat(maxTextLen - b.text.length)
-    return `    _block("${escaped}",${pad}  ${topPct.padStart(5)},  ${String(leftPct).padStart(2)}),`
+  const wordLines = wordList.map(w => {
+    const escaped = w.text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    const topPct = (w.top * 100).toFixed(1)
+    const leftPct = Math.round(w.left * 100)
+    const pad = ' '.repeat(maxTextLen - w.text.length)
+    return `    _word("${escaped}",${pad}  ${topPct.padStart(5)},  ${String(leftPct).padStart(2)}),`
   })
 
   const expectedLines = lineList.map(l => {
@@ -115,11 +132,11 @@ function downloadTestFixture() {
   const rowCount = lineList.length
 
   const content = [
-    `# ${blockList.length} blocks → ${rowCount} rows`,
+    `# ${wordList.length} words → ${rowCount} rows`,
     `# job_id: ${props.jobId || 'unknown'}`,
     ``,
-    `BLOCKS = [`,
-    ...blockLines,
+    `WORDS = [`,
+    ...wordLines,
     `]`,
     ``,
     `EXPECTED = [`,
@@ -156,14 +173,31 @@ function downloadTestFixture() {
         <table class="debug-blocks-table">
           <tbody>
             <template v-for="(row, idx) in blockDisplayRows" :key="idx">
-              <tr v-if="row.isSep" class="debug-row-sep">
-                <td colspan="3"></td>
-              </tr>
-              <tr v-else :class="{ 'debug-block--low-conf': row.block.confidence < 85 }">
-                <td class="debug-block-conf">{{ row.block.confidence.toFixed(0) }}%</td>
-                <td class="debug-block-text">{{ row.block.text }}</td>
+              <tr v-if="row.isSep" class="debug-row-sep"><td colspan="3"></td></tr>
+              <tr v-else :class="{ 'debug-block--low-conf': row.item.confidence < 85 }">
+                <td class="debug-block-conf">{{ row.item.confidence.toFixed(0) }}%</td>
+                <td class="debug-block-text">{{ row.item.text }}</td>
                 <td class="debug-block-pos">
-                  ↕{{ (row.block.top * 100).toFixed(1) }}% ←{{ Math.round(row.block.left * 100) }}%
+                  ↕{{ (row.item.top * 100).toFixed(1) }}% ←{{ Math.round(row.item.left * 100) }}%
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </template>
+
+      <!-- Words table -->
+      <template v-if="words.length">
+        <div class="debug-lines-heading" style="margin-top:0.6rem">{{ wordsHeading }}</div>
+        <table class="debug-blocks-table">
+          <tbody>
+            <template v-for="(row, idx) in wordDisplayRows" :key="idx">
+              <tr v-if="row.isSep" class="debug-row-sep"><td colspan="3"></td></tr>
+              <tr v-else :class="{ 'debug-block--low-conf': row.item.confidence < 85 }">
+                <td class="debug-block-conf">{{ row.item.confidence.toFixed(0) }}%</td>
+                <td class="debug-block-text">{{ row.item.text }}</td>
+                <td class="debug-block-pos">
+                  ↕{{ (row.item.top * 100).toFixed(1) }}% ←{{ Math.round(row.item.left * 100) }}%
                 </td>
               </tr>
             </template>
@@ -182,7 +216,10 @@ function downloadTestFixture() {
       </template>
 
       <!-- Download test fixture -->
-      <button class="btn btn-secondary" style="margin-top:0.75rem;font-size:0.75rem;" @click="downloadTestFixture">
+      <button class="btn btn-secondary" style="margin-top:0.75rem;font-size:0.75rem;" @click="downloadTextractJson">
+        Download textract JSON
+      </button>
+      <button class="btn btn-secondary" style="margin-top:0.75rem;font-size:0.75rem;margin-left:0.5rem;" @click="downloadTestFixture">
         Download test fixture (.py)
       </button>
     </template>
