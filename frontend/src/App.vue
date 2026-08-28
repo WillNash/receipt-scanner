@@ -48,6 +48,7 @@ function handleLogout() {
       <nav v-if="ready" class="main-nav">
         <RouterLink to="/" class="nav-link">Image View</RouterLink>
         <RouterLink to="/list" class="nav-link">List View</RouterLink>
+        <RouterLink to="/graphs" class="nav-link">Graphs</RouterLink>
       </nav>
       <button v-if="ready" class="btn btn-secondary" @click="handleLogout">Sign out</button>
     </header>
