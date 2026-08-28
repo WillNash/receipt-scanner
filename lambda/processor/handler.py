@@ -249,7 +249,10 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
         raw = image_data or s3.get_object(Bucket=bucket, Key=key)["Body"].read()
         data = _to_jpeg(raw)
 
-    _, tr, skew, correction, deskew_applied = _run_deskew_pipeline(data, SKEW_THRESHOLD)
+    final_data, tr, skew, correction, deskew_applied = _run_deskew_pipeline(data, SKEW_THRESHOLD)
+
+    if deskew_applied and cropped_key:
+        s3.put_object(Bucket=bucket, Key=cropped_key, Body=final_data, ContentType="image/jpeg")
 
     extracted, usage = _run_bedrock(tr.text)
 
