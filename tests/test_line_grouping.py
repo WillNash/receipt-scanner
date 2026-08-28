@@ -1249,5 +1249,62 @@ class TestGroupBlocksWordBasedCurled(unittest.TestCase):
         self.assertFalse(any("CAULIFLOWER" in l and "$14.72" in l for l in result))
 
 
+# ---------------------------------------------------------------------------
+# Fixture: New World Waikanae, 28 Aug 2026 (168 words, 55 rows)
+# job_id: ff9ffcc2-d314-4316-b4d5-24134adb5aa4
+# Key case: two consecutive right-aligned prices ($4.29 Fanta, $4.69 pie)
+# whose flat-Y values are close enough that the curl correction would pull
+# both into the FANTA row without the single-price-per-row guard in Phase 5.
+# ---------------------------------------------------------------------------
+_ff9ffcc2_ns = {"_word": _word}
+exec(
+    open(os.path.join(os.path.dirname(__file__), "..", "testjson", "test_fixture_ff9ffcc2.py")).read(),
+    _ff9ffcc2_ns,
+)
+NW_FF9FFCC2 = _ff9ffcc2_ns["WORDS"]
+NW_FF9FFCC2_EXPECTED = _ff9ffcc2_ns["EXPECTED"]
+
+
+class TestGroupBlocksNewWorldWaikanae(unittest.TestCase):
+    def test_row_count(self):
+        rows, _, _ = group_blocks(NW_FF9FFCC2)
+        self.assertEqual(len(rows), 55)
+
+    def test_all_words_assigned(self):
+        rows, _, _ = group_blocks(NW_FF9FFCC2)
+        self.assertEqual(sum(len(r) for r in rows), len(NW_FF9FFCC2))
+
+    def test_reading_order(self):
+        rows, _, _ = group_blocks(NW_FF9FFCC2)
+        tops = [min(b["Geometry"]["BoundingBox"]["Top"] for b in row) for row in rows]
+        self.assertEqual(tops, sorted(tops))
+
+    def test_merged_lines(self):
+        rows, _, _ = group_blocks(NW_FF9FFCC2)
+        self.assertEqual(_word_lines(rows), NW_FF9FFCC2_EXPECTED)
+
+    def test_fanta_carries_its_own_price(self):
+        """$4.29 belongs to Fanta, not the pie on the next line."""
+        rows, _, _ = group_blocks(NW_FF9FFCC2)
+        result = _word_lines(rows)
+        self.assertIn("FANTA ORANGE 600ML BTL $4.29", result)
+        self.assertFalse(any("FANTA" in l and "$4.69" in l for l in result))
+
+    def test_pie_carries_its_own_price(self):
+        """$4.69 belongs to the Oxford pie, not the Fanta row."""
+        rows, _, _ = group_blocks(NW_FF9FFCC2)
+        result = _word_lines(rows)
+        self.assertIn("OXFORD PIES STEAK 220G $4.69", result)
+        self.assertFalse(any("OXFORD" in l and "$4.29" in l for l in result))
+
+    def test_no_row_has_two_right_edge_prices(self):
+        """Phase 5 must never absorb two price orphans into the same row."""
+        rows, _, _ = group_blocks(NW_FF9FFCC2)
+        price_col = 0.65
+        for row in rows:
+            price_blocks = [b for b in row if b["Geometry"]["BoundingBox"]["Left"] > price_col]
+            self.assertLessEqual(len(price_blocks), 1, f"Row has {len(price_blocks)} price blocks: {_word_lines([row])}")
+
+
 if __name__ == "__main__":
     unittest.main()
