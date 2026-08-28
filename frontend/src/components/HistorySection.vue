@@ -28,6 +28,10 @@ function onEdit(job) {
   editingJob.value = job
 }
 
+function onDeleted(jobId) {
+  receipts.value = receipts.value.filter(r => r.jobId !== jobId)
+}
+
 async function onSaved() {
   editingJob.value = null
   await loadHistory()
@@ -48,6 +52,7 @@ function onCloseModal() {
       :job="job"
       :show-actions="true"
       @edit="onEdit"
+      @deleted="onDeleted"
     />
 
     <EditModal

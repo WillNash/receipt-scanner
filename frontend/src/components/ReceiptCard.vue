@@ -14,7 +14,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['edit'])
+const emit = defineEmits(['edit', 'deleted'])
 
 const apiFetch = inject('apiFetch', null)
 const CONFIG = inject('CONFIG', null)
@@ -79,6 +79,24 @@ async function openDebugJson() {
 async function toggleDebug() {
   if (!showDebug.value) await fetchUrls()
   showDebug.value = !showDebug.value
+}
+
+const confirmingDelete = ref(false)
+const deleting = ref(false)
+const deleteError = ref('')
+
+async function doDelete() {
+  deleting.value = true
+  deleteError.value = ''
+  try {
+    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts/${props.job.jobId}`, { method: 'DELETE' })
+    if (!resp.ok) throw new Error(`Server returned ${resp.status}`)
+    emit('deleted', props.job.jobId)
+  } catch (err) {
+    deleteError.value = 'Failed to delete — try again.'
+  } finally {
+    deleting.value = false
+  }
 }
 </script>
 
@@ -157,13 +175,21 @@ async function toggleDebug() {
       :job-id="job.jobId"
     />
 
-    <button
-      v-if="showActions"
-      class="btn btn-secondary edit-btn"
-      @click="emit('edit', job)"
-    >
-      Edit
-    </button>
+    <div v-if="showActions" class="card-footer">
+      <button class="btn btn-secondary edit-btn" @click="emit('edit', job)">Edit</button>
+      <button class="btn btn-danger-outline delete-btn" @click="confirmingDelete = true">Delete</button>
+    </div>
+
+    <div v-if="confirmingDelete" class="delete-confirm">
+      <span class="delete-confirm-text">Delete this receipt permanently?</span>
+      <span v-if="deleteError" class="delete-confirm-error">{{ deleteError }}</span>
+      <div class="delete-confirm-actions">
+        <button class="btn btn-secondary confirm-btn" :disabled="deleting" @click="confirmingDelete = false; deleteError = ''">Cancel</button>
+        <button class="btn btn-danger confirm-btn" :disabled="deleting" @click="doDelete">
+          {{ deleting ? 'Deleting…' : 'Delete' }}
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -178,8 +204,62 @@ async function toggleDebug() {
 .action-btn {
   font-size: 0.8rem;
 }
-.edit-btn {
+.card-footer {
   margin-top: 0.5rem;
+  display: flex;
+  gap: 0.5rem;
+}
+.edit-btn,
+.delete-btn {
   font-size: 0.8rem;
+}
+.btn-danger-outline {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+.btn-danger-outline:hover {
+  background: var(--danger-surface);
+}
+.delete-confirm {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--danger-surface);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.delete-confirm-text {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--danger);
+  flex: 1;
+}
+.delete-confirm-error {
+  font-size: var(--text-xs);
+  color: var(--danger);
+  width: 100%;
+}
+.delete-confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+.confirm-btn {
+  font-size: var(--text-xs);
+  padding: 0.3rem 0.75rem;
+}
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+}
+.btn-danger:hover:not(:disabled) {
+  background: #b71c1c;
+}
+.btn-danger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 </style>
