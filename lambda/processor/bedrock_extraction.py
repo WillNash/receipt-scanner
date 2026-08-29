@@ -103,7 +103,7 @@ def _build_receipt_tool() -> dict:
         },
         "receipt_date": {
             "type": "string",
-            "description": "Date of purchase as printed on the receipt",
+            "description": "Date of purchase, normalised to YYYY-MM-DD format (e.g. '2026-08-28'). Parse whatever date format is printed on the receipt and return it in this format.",
         },
         "total": {
             "type": "string",
