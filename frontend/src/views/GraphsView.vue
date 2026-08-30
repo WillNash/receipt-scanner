@@ -196,6 +196,12 @@ function buildChart() {
       maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
+        title: {
+          display: true,
+          text: groupBy.value === 'week' ? 'Spend by Week' : 'Spend by Day',
+          font: { size: 15, weight: '600' },
+          padding: { bottom: 12 },
+        },
         tooltip: {
           callbacks: { label: ctx => `$${ctx.parsed.y.toFixed(2)}` },
         },
@@ -204,8 +210,18 @@ function buildChart() {
         y: {
           beginAtZero: true,
           ticks: { callback: v => `$${v}` },
+          title: {
+            display: true,
+            text: 'Price ($)',
+            font: { size: 12, weight: '600' },
+          },
         },
         x: {
+          title: {
+            display: true,
+            text: groupBy.value === 'week' ? 'Week' : 'Date',
+            font: { size: 12, weight: '600' },
+          },
           ticks: {
             maxRotation: 45,
             minRotation: 0,
