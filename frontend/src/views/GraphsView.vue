@@ -93,8 +93,9 @@ function mondayOf(dateStr) {
 
 const chartData = computed(() => {
   const [startMs, endMs] = dateRange.value
-  const buckets = {}
 
+  // Accumulate spend into date buckets
+  const buckets = {}
   for (const r of allReceipts.value) {
     if (!r.receiptDate) continue
     const ts = new Date(r.receiptDate).getTime()
@@ -114,11 +115,37 @@ const chartData = computed(() => {
     buckets[key] = (buckets[key] || 0) + spend
   }
 
-  const labels = Object.keys(buckets).sort()
-  return {
-    labels,
-    values: labels.map(l => Math.round(buckets[l] * 100) / 100),
+  // Generate every time slot in the range so the axis is linear —
+  // slots with no spending get a 0 value instead of being omitted.
+  const labels = []
+  const values = []
+
+  if (groupBy.value === 'day') {
+    const cur = new Date(startMs)
+    cur.setHours(0, 0, 0, 0)
+    const end = new Date(endMs)
+    end.setHours(0, 0, 0, 0)
+    while (cur <= end) {
+      const key = cur.toISOString().slice(0, 10)
+      labels.push(key)
+      values.push(Math.round((buckets[key] || 0) * 100) / 100)
+      cur.setDate(cur.getDate() + 1)
+    }
+  } else {
+    // Start on the Monday of the week containing startMs
+    const cur = new Date(startMs)
+    cur.setHours(0, 0, 0, 0)
+    cur.setDate(cur.getDate() - (cur.getDay() + 6) % 7)
+    const end = new Date(endMs)
+    while (cur <= end) {
+      const key = cur.toISOString().slice(0, 10)
+      labels.push(key)
+      values.push(Math.round((buckets[key] || 0) * 100) / 100)
+      cur.setDate(cur.getDate() + 7)
+    }
   }
+
+  return { labels, values }
 })
 
 // --- Chart rendering ---
@@ -163,7 +190,12 @@ function buildChart() {
           ticks: { callback: v => `$${v}` },
         },
         x: {
-          ticks: { maxRotation: 45, minRotation: 0 },
+          ticks: {
+            maxRotation: 45,
+            minRotation: 0,
+            maxTicksLimit: groupBy.value === 'week' ? 26 : 16,
+            autoSkip: true,
+          },
         },
       },
     },
