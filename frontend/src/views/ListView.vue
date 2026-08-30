@@ -3,6 +3,11 @@ import { ref, computed, inject, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { formatDate } from '../utils.js'
 
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+function isIsoDate(date) {
+  return !!date && ISO_DATE_RE.test(date)
+}
+
 const apiFetch = inject('apiFetch')
 const CONFIG = inject('CONFIG')
 const router = useRouter()
@@ -18,6 +23,11 @@ const filterStore = ref('')
 const confirmingId = ref(null) // jobId currently showing delete confirmation
 const deletingId = ref(null)   // jobId mid-delete API call
 const deleteError = ref(null)
+
+const editingDateId = ref(null)
+const editDateVal = ref('')
+const savingDate = ref(false)
+const dateEditError = ref(null)
 
 onMounted(async () => {
   try {
@@ -85,6 +95,42 @@ function cancelDelete(e) {
   e.stopPropagation()
   confirmingId.value = null
   deleteError.value = null
+}
+
+function startEditDate(e, job) {
+  e.stopPropagation()
+  editingDateId.value = job.jobId
+  editDateVal.value = isIsoDate(job.receiptDate) ? job.receiptDate : ''
+  dateEditError.value = null
+}
+
+function cancelEditDate(e) {
+  e.stopPropagation()
+  editingDateId.value = null
+  dateEditError.value = null
+}
+
+async function saveEditDate(e, jobId) {
+  e.stopPropagation()
+  if (!editDateVal.value) return
+  savingDate.value = true
+  dateEditError.value = null
+  try {
+    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts/${jobId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ receiptDate: editDateVal.value }),
+    })
+    if (!resp.ok) throw new Error(`Server returned ${resp.status}`)
+    const updated = await resp.json()
+    const idx = receipts.value.findIndex(r => r.jobId === jobId)
+    if (idx !== -1) receipts.value[idx] = { ...receipts.value[idx], receiptDate: updated.receiptDate }
+    editingDateId.value = null
+  } catch {
+    dateEditError.value = 'Failed to save — try again.'
+  } finally {
+    savingDate.value = false
+  }
 }
 
 async function confirmDelete(e, jobId) {
@@ -166,7 +212,37 @@ async function confirmDelete(e, jobId) {
             >
               <td>{{ job.vendor || '—' }}</td>
               <td>{{ job.storeCategory ? job.storeCategory.replace(/_/g, ' ') : '—' }}</td>
-              <td>{{ job.receiptDate ? formatDate(job.receiptDate) : '—' }}</td>
+              <td class="date-cell">
+                <template v-if="editingDateId === job.jobId">
+                  <div class="date-edit-row" @click.stop>
+                    <input
+                      type="date"
+                      v-model="editDateVal"
+                      class="date-edit-input"
+                    />
+                    <button
+                      class="btn btn-primary save-date-btn"
+                      :disabled="savingDate || !editDateVal"
+                      @click="saveEditDate($event, job.jobId)"
+                    >{{ savingDate ? '…' : 'Save' }}</button>
+                    <button
+                      class="btn btn-secondary save-date-btn"
+                      :disabled="savingDate"
+                      @click="cancelEditDate($event)"
+                    >Cancel</button>
+                    <span v-if="dateEditError" class="date-edit-error">{{ dateEditError }}</span>
+                  </div>
+                </template>
+                <template v-else>
+                  <span v-if="!isIsoDate(job.receiptDate)" class="date-flag" title="Date not in standard format">!</span>
+                  <span class="date-text">{{ job.receiptDate ? formatDate(job.receiptDate) : '—' }}</span>
+                  <button
+                    class="edit-date-btn"
+                    title="Edit date"
+                    @click="startEditDate($event, job)"
+                  >&#x270F;</button>
+                </template>
+              </td>
               <td>{{ job.total || '—' }}</td>
               <td class="col-action">
                 <button
@@ -333,6 +409,73 @@ async function confirmDelete(e, jobId) {
 .btn-danger:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.date-cell {
+  white-space: nowrap;
+}
+
+.date-flag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: #f59e0b;
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  margin-right: 0.3rem;
+  vertical-align: middle;
+  line-height: 1;
+}
+
+.edit-date-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.25rem;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+  color: var(--muted);
+  line-height: 1;
+  vertical-align: middle;
+  margin-left: 0.2rem;
+}
+
+.edit-date-btn:hover {
+  color: var(--accent);
+}
+
+.receipt-row:hover .edit-date-btn {
+  opacity: 1;
+}
+
+.date-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.date-edit-input {
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: var(--text-sm);
+  background: var(--surface);
+}
+
+.save-date-btn {
+  font-size: var(--text-xs);
+  padding: 0.25rem 0.6rem;
+  white-space: nowrap;
+}
+
+.date-edit-error {
+  font-size: var(--text-xs);
+  color: var(--danger);
 }
 
 .state-text {
