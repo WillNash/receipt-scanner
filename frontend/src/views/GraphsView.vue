@@ -234,6 +234,17 @@ function buildChart() {
   })
 }
 
+const spendSummary = computed(() => {
+  const nonZero = chartData.value.values.filter(v => v > 0)
+  const total = chartData.value.values.reduce((s, v) => s + v, 0)
+  const avg = nonZero.length ? total / nonZero.length : 0
+  return {
+    total: total.toFixed(2),
+    avg: avg.toFixed(2),
+    periods: nonZero.length,
+  }
+})
+
 watch([chartData, canvasRef], () => { nextTick(buildChart) }, { flush: 'post' })
 
 onUnmounted(() => { if (chart) chart.destroy() })
@@ -291,9 +302,21 @@ onUnmounted(() => { if (chart) chart.destroy() })
       <div v-if="chartData.labels.length === 0" class="state-text">
         No data for the selected filters.
       </div>
-      <div v-else class="chart-wrap">
-        <canvas ref="canvasRef" />
-      </div>
+      <template v-else>
+        <div class="chart-wrap">
+          <canvas ref="canvasRef" />
+        </div>
+        <div class="spend-stats">
+          <div class="stat-card">
+            <span class="stat-label">Total Spend</span>
+            <span class="stat-value">${{ spendSummary.total }}</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Avg per {{ groupBy === 'week' ? 'Week' : 'Day' }}</span>
+            <span class="stat-value">${{ spendSummary.avg }}</span>
+          </div>
+        </div>
+      </template>
     </template>
   </div>
 </template>
@@ -388,6 +411,37 @@ onUnmounted(() => { if (chart) chart.destroy() })
   box-shadow: var(--shadow);
   padding: 1.25rem 1.25rem 1rem;
   height: 340px;
+}
+
+.spend-stats {
+  display: flex;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.stat-card {
+  flex: 1;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 0.9rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.stat-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.stat-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--accent);
 }
 
 .state-text {
