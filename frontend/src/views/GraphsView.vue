@@ -43,7 +43,8 @@ const DAY_MS = 86_400_000
 const sliderMin = computed(() => {
   const dates = allReceipts.value
     .filter(r => r.receiptDate)
-    .map(r => new Date(r.receiptDate).getTime())
+    .map(r => parseDateLocal(r.receiptDate))
+    .filter(ts => !isNaN(ts))
   return dates.length ? Math.min(...dates) : Date.now() - DAY_MS
 })
 
@@ -85,10 +86,25 @@ function parseAmount(str) {
   return parseFloat((str || '0').replace(/[^0-9.-]/g, '')) || 0
 }
 
+// Parse a date string to a local-midnight timestamp.
+// YYYY-MM-DD strings are spec-defined as UTC midnight by Date.parse(),
+// so we split manually to get local midnight instead.
+function parseDateLocal(dateStr) {
+  if (!dateStr) return NaN
+  const m = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3]).getTime()
+  return new Date(dateStr).getTime()
+}
+
+// Format a Date object to YYYY-MM-DD using local time fields.
+function toDateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 function mondayOf(dateStr) {
-  const d = new Date(dateStr)
+  const d = new Date(parseDateLocal(dateStr))
   d.setDate(d.getDate() - (d.getDay() + 6) % 7)
-  return d.toISOString().slice(0, 10)
+  return toDateKey(d)
 }
 
 const chartData = computed(() => {
@@ -98,8 +114,8 @@ const chartData = computed(() => {
   const buckets = {}
   for (const r of allReceipts.value) {
     if (!r.receiptDate) continue
-    const ts = new Date(r.receiptDate).getTime()
-    if (ts < startMs || ts > endMs) continue
+    const ts = parseDateLocal(r.receiptDate)
+    if (isNaN(ts) || ts < startMs || ts > endMs) continue
     if (filterStore.value && r.vendor !== filterStore.value) continue
 
     let spend
@@ -126,7 +142,7 @@ const chartData = computed(() => {
     const end = new Date(endMs)
     end.setHours(0, 0, 0, 0)
     while (cur <= end) {
-      const key = cur.toISOString().slice(0, 10)
+      const key = toDateKey(cur)
       labels.push(key)
       values.push(Math.round((buckets[key] || 0) * 100) / 100)
       cur.setDate(cur.getDate() + 1)
@@ -138,7 +154,7 @@ const chartData = computed(() => {
     cur.setDate(cur.getDate() - (cur.getDay() + 6) % 7)
     const end = new Date(endMs)
     while (cur <= end) {
-      const key = cur.toISOString().slice(0, 10)
+      const key = toDateKey(cur)
       labels.push(key)
       values.push(Math.round((buckets[key] || 0) * 100) / 100)
       cur.setDate(cur.getDate() + 7)
