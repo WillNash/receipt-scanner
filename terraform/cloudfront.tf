@@ -70,9 +70,16 @@ resource "aws_cloudfront_distribution" "frontend" {
     max_ttl     = 86400
   }
 
-  # SPA routing: return index.html for true 404s so client-side routing works.
-  # 403 is NOT remapped — it indicates a real access-denied (e.g. direct S3 key
-  # access) and should surface as an error rather than silently serving index.html.
+  # SPA routing: S3 returns 403 (not 404) for missing keys in private OAC buckets
+  # to prevent key enumeration. Both codes must be remapped to index.html so that
+  # any client-side route (e.g. /callback after OAuth) loads the app correctly.
+  custom_error_response {
+    error_code            = 403
+    response_code         = 200
+    response_page_path    = "/index.html"
+    error_caching_min_ttl = 0
+  }
+
   custom_error_response {
     error_code            = 404
     response_code         = 200
