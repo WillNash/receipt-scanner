@@ -241,7 +241,10 @@ async function saveEditDate(e, jobId) {
                   <button class="edit-date-btn" title="Edit date" @click="startEditDate($event, job)">&#x270F;</button>
                 </template>
               </td>
-              <td>{{ job.total || '—' }}</td>
+              <td class="total-cell">
+                <span v-if="job.priceCheckWarning" class="price-warn" :title="job.priceCheckMessage || 'Item prices do not match total'">!</span>
+                {{ job.total || '—' }}
+              </td>
               <td class="col-action">
                 <button class="delete-btn" title="Delete receipt" @click="startDelete($event, job.jobId)">&#x1F5D1;</button>
               </td>
@@ -371,6 +374,25 @@ async function saveEditDate(e, jobId) {
 }
 
 /* Date cell */
+.total-cell { white-space: nowrap; }
+
+.price-warn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: var(--danger);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  margin-right: 0.3rem;
+  vertical-align: middle;
+  line-height: 1;
+  cursor: default;
+}
+
 .date-cell { white-space: nowrap; }
 
 .date-flag {
