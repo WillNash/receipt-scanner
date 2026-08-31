@@ -33,6 +33,7 @@ const urlsFetched = ref(
 
 const items = computed(() => (Array.isArray(props.job.items) ? props.job.items : []))
 const hasDiscount = computed(() => items.value.some(it => it.discount))
+const hasCategory = computed(() => items.value.some(it => it.item_category))
 
 const categoryLabel = computed(() => {
   if (!props.job.storeCategory) return ''
@@ -134,6 +135,7 @@ async function doDelete() {
       <thead>
         <tr>
           <th>Item</th>
+          <th v-if="hasCategory">Category</th>
           <th>Qty</th>
           <th>Unit price</th>
           <th v-if="hasDiscount">Discount</th>
@@ -146,6 +148,7 @@ async function doDelete() {
             {{ it.description }}
             <span v-if="it.package_size" class="pkg-size">{{ it.package_size }}</span>
           </td>
+          <td v-if="hasCategory" class="item-category">{{ it.item_category ? it.item_category.replace(/_/g, ' ') : '' }}</td>
           <td>{{ it.quantity }}</td>
           <td>{{ it.unit_price }}</td>
           <td v-if="hasDiscount">{{ it.discount || '' }}</td>
@@ -194,6 +197,12 @@ async function doDelete() {
 </template>
 
 <style scoped>
+.item-category {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
 .action-bar {
   margin-top: 0.5rem;
   display: flex;

@@ -16,7 +16,13 @@ async function loadHistory() {
     const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts`)
     if (!resp.ok) return
     const data = await resp.json()
-    receipts.value = data.receipts || []
+    receipts.value = (data.receipts || []).slice().sort((a, b) => {
+      const da = a.receiptDate || ''
+      const db = b.receiptDate || ''
+      if (db < da) return -1
+      if (db > da) return 1
+      return 0
+    })
   } catch (err) {
     console.error('History load error:', err)
   }
