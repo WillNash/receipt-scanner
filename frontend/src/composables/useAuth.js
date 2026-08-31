@@ -4,6 +4,18 @@ export function getToken() {
   return sessionStorage.getItem('id_token')
 }
 
+export function getUser() {
+  const token = getToken()
+  if (!token) return null
+  try {
+    const payload = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+    const claims = JSON.parse(atob(payload))
+    return { email: claims.email || null, sub: claims.sub || null }
+  } catch {
+    return null
+  }
+}
+
 export function logout() {
   sessionStorage.clear()
   const logoutUrl =
