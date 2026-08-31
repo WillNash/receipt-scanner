@@ -2,40 +2,20 @@
 import { ref, computed, inject, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { Chart, registerables } from 'chart.js'
 import RangeSlider from '../components/RangeSlider.vue'
+import { useReceipts } from '../composables/useReceipts.js'
 
 Chart.register(...registerables)
 
 const apiFetch = inject('apiFetch')
 const CONFIG = inject('CONFIG')
 
-// --- Data loading (all pages) ---
-const allReceipts = ref([])
-const loading = ref(true)
-const loadingMsg = ref('Loading receipts…')
-const error = ref(null)
+const { allReceipts, loading, loaded, loadedCount, error, fetchAll } = useReceipts(apiFetch, CONFIG)
 
-onMounted(async () => {
-  try {
-    let cursor = null
-    let page = 1
-    do {
-      if (page > 1) loadingMsg.value = `Loading receipts (page ${page})…`
-      const url = cursor
-        ? `${CONFIG.apiBaseUrl}/receipts?lastKey=${encodeURIComponent(cursor)}`
-        : `${CONFIG.apiBaseUrl}/receipts`
-      const resp = await apiFetch(url)
-      if (!resp.ok) throw new Error('Failed to load receipts')
-      const data = await resp.json()
-      allReceipts.value.push(...(data.receipts || []))
-      cursor = data.lastKey ?? null
-      page++
-    } while (cursor)
-  } catch (e) {
-    error.value = e.message
-  } finally {
-    loading.value = false
-  }
-})
+onMounted(fetchAll)
+
+const loadingMsg = computed(() =>
+  loadedCount.value > 0 ? `Loading receipts (${loadedCount.value} so far)…` : 'Loading receipts…'
+)
 
 // --- Date range slider ---
 const DAY_MS = 86_400_000
@@ -56,10 +36,11 @@ const sliderMax = computed(() => {
 
 const dateRange = ref([0, 1])
 
-// Initialise range once loading finishes
-watch(loading, isLoading => {
-  if (!isLoading) dateRange.value = [sliderMin.value, sliderMax.value]
-})
+// Initialise slider range once all receipts are available.
+// If already loaded when this view mounts (cached), set immediately.
+watch(loaded, isLoaded => {
+  if (isLoaded) dateRange.value = [sliderMin.value, sliderMax.value]
+}, { immediate: true })
 
 function fmtTs(ts) {
   return new Date(ts).toLocaleDateString()

@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed, inject, onMounted } from 'vue'
+import { ref, computed, inject, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { formatDate } from '../utils.js'
+import { useReceipts } from '../composables/useReceipts.js'
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 function isIsoDate(date) {
@@ -12,35 +13,16 @@ const apiFetch = inject('apiFetch')
 const CONFIG = inject('CONFIG')
 const router = useRouter()
 
-const receipts = ref([])
-const loading = ref(true)
-const error = ref(null)
+const { allReceipts, loading, error, fetchAll, removeReceipt, updateReceipt } = useReceipts(apiFetch, CONFIG)
 
+onMounted(fetchAll)
+
+const receipts = computed(() => allReceipts.value.filter(r => r.status === 'COMPLETE'))
+
+// --- Sort & filter ---
 const sortField = ref('receiptDate')
 const sortDir = ref('desc')
 const filterStore = ref('')
-
-const confirmingId = ref(null) // jobId currently showing delete confirmation
-const deletingId = ref(null)   // jobId mid-delete API call
-const deleteError = ref(null)
-
-const editingDateId = ref(null)
-const editDateVal = ref('')
-const savingDate = ref(false)
-const dateEditError = ref(null)
-
-onMounted(async () => {
-  try {
-    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts`)
-    if (!resp.ok) throw new Error('Failed to load receipts')
-    const data = await resp.json()
-    receipts.value = (data.receipts || []).filter(r => r.status === 'COMPLETE')
-  } catch (err) {
-    error.value = err.message
-  } finally {
-    loading.value = false
-  }
-})
 
 const storeOptions = computed(() => {
   const vendors = receipts.value.map(r => r.vendor).filter(Boolean)
@@ -71,6 +53,23 @@ const sorted = computed(() => {
   })
 })
 
+// --- Pagination ---
+const PAGE_SIZE = 20
+const currentPage = ref(1)
+
+const totalPages = computed(() => Math.max(1, Math.ceil(sorted.value.length / PAGE_SIZE)))
+
+const paginated = computed(() => {
+  const start = (currentPage.value - 1) * PAGE_SIZE
+  return sorted.value.slice(start, start + PAGE_SIZE)
+})
+
+watch([sortField, sortDir, filterStore], () => { currentPage.value = 1 })
+watch(sorted, () => {
+  if (currentPage.value > totalPages.value) currentPage.value = totalPages.value
+})
+
+// --- Sort helpers ---
 function setSort(field) {
   if (sortField.value === field) {
     sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
@@ -85,6 +84,11 @@ function sortIndicator(field) {
   return sortDir.value === 'asc' ? ' ▲' : ' ▼'
 }
 
+// --- Delete ---
+const confirmingId = ref(null)
+const deletingId = ref(null)
+const deleteError = ref(null)
+
 function startDelete(e, jobId) {
   e.stopPropagation()
   deleteError.value = null
@@ -96,6 +100,28 @@ function cancelDelete(e) {
   confirmingId.value = null
   deleteError.value = null
 }
+
+async function confirmDelete(e, jobId) {
+  e.stopPropagation()
+  deletingId.value = jobId
+  deleteError.value = null
+  try {
+    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts/${jobId}`, { method: 'DELETE' })
+    if (!resp.ok) throw new Error(`Server returned ${resp.status}`)
+    removeReceipt(jobId)
+    confirmingId.value = null
+  } catch {
+    deleteError.value = { jobId, message: 'Failed to delete — try again.' }
+  } finally {
+    deletingId.value = null
+  }
+}
+
+// --- Edit date ---
+const editingDateId = ref(null)
+const editDateVal = ref('')
+const savingDate = ref(false)
+const dateEditError = ref(null)
 
 function startEditDate(e, job) {
   e.stopPropagation()
@@ -123,29 +149,12 @@ async function saveEditDate(e, jobId) {
     })
     if (!resp.ok) throw new Error(`Server returned ${resp.status}`)
     const updated = await resp.json()
-    const idx = receipts.value.findIndex(r => r.jobId === jobId)
-    if (idx !== -1) receipts.value[idx] = { ...receipts.value[idx], receiptDate: updated.receiptDate }
+    updateReceipt(jobId, { receiptDate: updated.receiptDate })
     editingDateId.value = null
   } catch {
     dateEditError.value = 'Failed to save — try again.'
   } finally {
     savingDate.value = false
-  }
-}
-
-async function confirmDelete(e, jobId) {
-  e.stopPropagation()
-  deletingId.value = jobId
-  deleteError.value = null
-  try {
-    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts/${jobId}`, { method: 'DELETE' })
-    if (!resp.ok) throw new Error(`Server returned ${resp.status}`)
-    receipts.value = receipts.value.filter(r => r.jobId !== jobId)
-    confirmingId.value = null
-  } catch (err) {
-    deleteError.value = { jobId, message: 'Failed to delete — try again.' }
-  } finally {
-    deletingId.value = null
   }
 }
 </script>
@@ -164,6 +173,7 @@ async function confirmDelete(e, jobId) {
             <option v-for="store in storeOptions" :key="store" :value="store">{{ store }}</option>
           </select>
         </label>
+        <span class="receipt-count">{{ sorted.length }} receipt{{ sorted.length !== 1 ? 's' : '' }}</span>
       </div>
 
       <div v-if="sorted.length === 0" class="state-text">No receipts found.</div>
@@ -179,7 +189,7 @@ async function confirmDelete(e, jobId) {
           </tr>
         </thead>
         <tbody>
-          <template v-for="job in sorted" :key="job.jobId">
+          <template v-for="job in paginated" :key="job.jobId">
             <!-- Confirmation row -->
             <tr v-if="confirmingId === job.jobId" class="confirm-row">
               <td colspan="5">
@@ -205,21 +215,13 @@ async function confirmDelete(e, jobId) {
             </tr>
 
             <!-- Normal row -->
-            <tr
-              v-else
-              class="receipt-row"
-              @click="router.push(`/receipt/${job.jobId}`)"
-            >
+            <tr v-else class="receipt-row" @click="router.push(`/receipt/${job.jobId}`)">
               <td>{{ job.vendor || '—' }}</td>
               <td>{{ job.storeCategory ? job.storeCategory.replace(/_/g, ' ') : '—' }}</td>
               <td class="date-cell">
                 <template v-if="editingDateId === job.jobId">
                   <div class="date-edit-row" @click.stop>
-                    <input
-                      type="date"
-                      v-model="editDateVal"
-                      class="date-edit-input"
-                    />
+                    <input type="date" v-model="editDateVal" class="date-edit-input" />
                     <button
                       class="btn btn-primary save-date-btn"
                       :disabled="savingDate || !editDateVal"
@@ -236,25 +238,24 @@ async function confirmDelete(e, jobId) {
                 <template v-else>
                   <span v-if="!isIsoDate(job.receiptDate)" class="date-flag" title="Date not in standard format">!</span>
                   <span class="date-text">{{ job.receiptDate ? formatDate(job.receiptDate) : '—' }}</span>
-                  <button
-                    class="edit-date-btn"
-                    title="Edit date"
-                    @click="startEditDate($event, job)"
-                  >&#x270F;</button>
+                  <button class="edit-date-btn" title="Edit date" @click="startEditDate($event, job)">&#x270F;</button>
                 </template>
               </td>
               <td>{{ job.total || '—' }}</td>
               <td class="col-action">
-                <button
-                  class="delete-btn"
-                  title="Delete receipt"
-                  @click="startDelete($event, job.jobId)"
-                >&#x1F5D1;</button>
+                <button class="delete-btn" title="Delete receipt" @click="startDelete($event, job.jobId)">&#x1F5D1;</button>
               </td>
             </tr>
           </template>
         </tbody>
       </table>
+
+      <!-- Pagination -->
+      <div v-if="totalPages > 1" class="pagination">
+        <button class="btn btn-secondary page-btn" :disabled="currentPage === 1" @click="currentPage--">&#8592; Prev</button>
+        <span class="page-info">Page {{ currentPage }} of {{ totalPages }}</span>
+        <button class="btn btn-secondary page-btn" :disabled="currentPage === totalPages" @click="currentPage++">Next &#8594;</button>
+      </div>
     </template>
   </div>
 </template>
@@ -286,6 +287,12 @@ async function confirmDelete(e, jobId) {
   font-size: var(--text-sm);
   background: var(--surface);
   cursor: pointer;
+}
+
+.receipt-count {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  margin-left: auto;
 }
 
 .receipts-table {
@@ -342,7 +349,8 @@ async function confirmDelete(e, jobId) {
   background: #f5f8ff;
 }
 
-.receipt-row:hover .delete-btn {
+.receipt-row:hover .delete-btn,
+.receipt-row:hover .edit-date-btn {
   opacity: 1;
 }
 
@@ -362,6 +370,67 @@ async function confirmDelete(e, jobId) {
   color: var(--danger);
 }
 
+/* Date cell */
+.date-cell { white-space: nowrap; }
+
+.date-flag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: #f59e0b;
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  margin-right: 0.3rem;
+  vertical-align: middle;
+  line-height: 1;
+}
+
+.edit-date-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.25rem;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+  color: var(--muted);
+  line-height: 1;
+  vertical-align: middle;
+  margin-left: 0.2rem;
+}
+
+.edit-date-btn:hover { color: var(--accent); }
+
+.date-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.date-edit-input {
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: var(--text-sm);
+  background: var(--surface);
+}
+
+.save-date-btn {
+  font-size: var(--text-xs);
+  padding: 0.25rem 0.6rem;
+  white-space: nowrap;
+}
+
+.date-edit-error {
+  font-size: var(--text-xs);
+  color: var(--danger);
+}
+
+/* Confirm row */
 .confirm-row td {
   background: var(--danger-surface);
   border-bottom: 1px solid #f5c6cb;
@@ -402,80 +471,28 @@ async function confirmDelete(e, jobId) {
   color: #fff;
 }
 
-.btn-danger:hover:not(:disabled) {
-  background: #b71c1c;
-}
+.btn-danger:hover:not(:disabled) { background: #b71c1c; }
+.btn-danger:disabled { opacity: 0.6; cursor: not-allowed; }
 
-.btn-danger:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.date-cell {
-  white-space: nowrap;
-}
-
-.date-flag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.1rem;
-  height: 1.1rem;
-  border-radius: 50%;
-  background: #f59e0b;
-  color: #fff;
-  font-size: 0.65rem;
-  font-weight: 700;
-  margin-right: 0.3rem;
-  vertical-align: middle;
-  line-height: 1;
-}
-
-.edit-date-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 0.85rem;
-  padding: 0.15rem 0.25rem;
-  opacity: 0;
-  transition: opacity 0.1s, color 0.1s;
-  color: var(--muted);
-  line-height: 1;
-  vertical-align: middle;
-  margin-left: 0.2rem;
-}
-
-.edit-date-btn:hover {
-  color: var(--accent);
-}
-
-.receipt-row:hover .edit-date-btn {
-  opacity: 1;
-}
-
-.date-edit-row {
+/* Pagination */
+.pagination {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1rem;
 }
 
-.date-edit-input {
-  padding: 0.2rem 0.4rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+.page-btn {
   font-size: var(--text-sm);
-  background: var(--surface);
+  padding: 0.35rem 0.85rem;
 }
 
-.save-date-btn {
-  font-size: var(--text-xs);
-  padding: 0.25rem 0.6rem;
-  white-space: nowrap;
-}
-
-.date-edit-error {
-  font-size: var(--text-xs);
-  color: var(--danger);
+.page-info {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  min-width: 8rem;
+  text-align: center;
 }
 
 .state-text {
@@ -484,7 +501,5 @@ async function confirmDelete(e, jobId) {
   color: var(--muted);
 }
 
-.state-text--error {
-  color: var(--danger);
-}
+.state-text--error { color: var(--danger); }
 </style>
