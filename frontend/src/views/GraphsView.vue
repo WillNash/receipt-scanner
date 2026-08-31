@@ -216,13 +216,13 @@ function buildChart() {
 }
 
 const spendSummary = computed(() => {
-  const nonZero = chartData.value.values.filter(v => v > 0)
-  const total = chartData.value.values.reduce((s, v) => s + v, 0)
-  const avg = nonZero.length ? total / nonZero.length : 0
+  const { labels, values } = chartData.value
+  const total = values.reduce((s, v) => s + v, 0)
+  const periods = labels.length
+  const avg = periods ? total / periods : 0
   return {
     total: total.toFixed(2),
     avg: avg.toFixed(2),
-    periods: nonZero.length,
   }
 })
 
