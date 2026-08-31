@@ -23,12 +23,13 @@ const showDebug = ref(false)
 
 // URLs may be absent from list responses — load them lazily on first action click.
 const loadedUrls = ref({
+  imageUrl: props.job.imageUrl ?? null,
   debugUrl: props.job.debugUrl ?? null,
   textractDebugUrl: props.job.textractDebugUrl ?? null,
   croppedImageUrl: props.job.croppedImageUrl ?? null,
 })
 const urlsFetched = ref(
-  !!(props.job.debugUrl || props.job.textractDebugUrl || props.job.croppedImageUrl)
+  !!(props.job.imageUrl || props.job.debugUrl || props.job.textractDebugUrl || props.job.croppedImageUrl)
 )
 
 const items = computed(() => (Array.isArray(props.job.items) ? props.job.items : []))
@@ -57,6 +58,7 @@ async function fetchUrls() {
     if (!resp.ok) return
     const data = await resp.json()
     loadedUrls.value = {
+      imageUrl: data.imageUrl ?? null,
       debugUrl: data.debugUrl ?? null,
       textractDebugUrl: data.textractDebugUrl ?? null,
       croppedImageUrl: data.croppedImageUrl ?? null,
@@ -65,6 +67,11 @@ async function fetchUrls() {
   } catch (e) {
     console.error('Failed to fetch job URLs:', e)
   }
+}
+
+async function openImage() {
+  await fetchUrls()
+  if (loadedUrls.value.imageUrl) window.open(loadedUrls.value.imageUrl, '_blank')
 }
 
 async function openCroppedImage() {
@@ -160,6 +167,9 @@ async function doDelete() {
     <!-- Action bar: URLs are loaded lazily from GET /jobs/{jobId} on first click -->
     <template v-if="canShowActions">
       <div class="action-bar">
+        <button class="btn btn-secondary action-btn" @click="openImage">
+          Download image
+        </button>
         <button v-if="hasCropped" class="btn btn-secondary action-btn" @click="openCroppedImage">
           Cropped image
         </button>

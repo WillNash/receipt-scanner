@@ -523,6 +523,7 @@ def format_receipt(job: JobRecord, include_urls: bool = True) -> dict:
     debug_url = None
     textract_debug_url = None
     cropped_image_url = None
+    image_url = None
 
     if include_urls:
         def presign(key, filename):
@@ -532,6 +533,9 @@ def format_receipt(job: JobRecord, include_urls: bool = True) -> dict:
                         "ResponseContentDisposition": f"attachment; filename={filename}"},
                 ExpiresIn=PRESIGNED_GET_TTL_SECONDS,
             )
+        if job.s3_key:
+            ext = job.s3_key.rsplit(".", 1)[-1] if "." in job.s3_key else "jpg"
+            image_url = presign(job.s3_key, f"receipt_{job.job_id}.{ext}")
         if job.debug_s3_key:
             debug_url = presign(job.debug_s3_key, f"claude_{job.job_id}.json")
         if job.textract_debug_s3_key:
@@ -549,6 +553,7 @@ def format_receipt(job: JobRecord, include_urls: bool = True) -> dict:
         "items": line_items,
         "priceCheckWarning": job.price_check_warning,
         "priceCheckMessage": job.price_check_message,
+        "imageUrl": image_url,
         "debugUrl": debug_url,
         "textractDebugUrl": textract_debug_url,
         "croppedImageUrl": cropped_image_url,
