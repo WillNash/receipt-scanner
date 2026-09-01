@@ -20,6 +20,7 @@ const editItems = ref(
 )
 const saving = ref(false)
 const saveError = ref('')
+const storeNames = ref([])
 
 const receiptTotal = parseFloat(props.job.total) || 0
 
@@ -66,6 +67,10 @@ function onEscape(e) {
 
 onMounted(() => {
   document.addEventListener('keydown', onEscape)
+  apiFetch(`${CONFIG.apiBaseUrl}/stores`)
+    .then(r => r.ok ? r.json() : Promise.reject(new Error(`GET /stores ${r.status}`)))
+    .then(data => { if (Array.isArray(data.stores)) storeNames.value = data.stores })
+    .catch(err => console.warn('Store list unavailable:', err))
 })
 
 onUnmounted(() => {
@@ -106,7 +111,10 @@ async function save() {
 
       <div class="field-group">
         <label class="field-label">Store / Vendor</label>
-        <input v-model="vendor" type="text" class="field-input" />
+        <input v-model="vendor" type="text" list="store-options" autocomplete="off" placeholder="Type to search…" class="field-input" />
+        <datalist id="store-options">
+          <option v-for="name in storeNames" :key="name" :value="name" />
+        </datalist>
       </div>
 
       <div class="field-group">
