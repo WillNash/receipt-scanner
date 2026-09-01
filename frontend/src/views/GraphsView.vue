@@ -49,11 +49,17 @@ function fmtTs(ts) {
 // --- Filters ---
 const groupBy = ref('day')
 const filterStore = ref('')
+const filterStoreCategory = ref('')
 const filterCategory = ref('')
 
 const storeOptions = computed(() => {
   const vendors = allReceipts.value.map(r => r.vendor).filter(Boolean)
   return [...new Set(vendors)].sort()
+})
+
+const storeCategoryOptions = computed(() => {
+  const cats = allReceipts.value.map(r => r.storeCategory).filter(Boolean)
+  return [...new Set(cats)].sort()
 })
 
 const categoryOptions = computed(() => {
@@ -98,6 +104,7 @@ const chartData = computed(() => {
     const ts = parseDateLocal(r.receiptDate)
     if (isNaN(ts) || ts < startMs || ts > endMs) continue
     if (filterStore.value && r.vendor !== filterStore.value) continue
+    if (filterStoreCategory.value && r.storeCategory !== filterStoreCategory.value) continue
 
     let spend
     if (filterCategory.value) {
@@ -256,9 +263,17 @@ onUnmounted(() => { if (chart) chart.destroy() })
         </div>
 
         <div class="control-group">
-          <label class="control-label" for="g-cat">Category</label>
+          <label class="control-label" for="g-store-cat">Store category</label>
+          <select id="g-store-cat" v-model="filterStoreCategory" class="filter-select">
+            <option value="">All store categories</option>
+            <option v-for="c in storeCategoryOptions" :key="c" :value="c">{{ c.replace(/_/g, ' ') }}</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <label class="control-label" for="g-cat">Item</label>
           <select id="g-cat" v-model="filterCategory" class="filter-select">
-            <option value="">All categories</option>
+            <option value="">All items</option>
             <option v-for="c in categoryOptions" :key="c" :value="c">{{ c }}</option>
           </select>
         </div>
