@@ -17,6 +17,14 @@ const { allReceipts, loading, error, fetchAll, removeReceipt, updateReceipt } = 
 
 onMounted(fetchAll)
 
+const storeNames = ref([])
+onMounted(() => {
+  apiFetch(`${CONFIG.apiBaseUrl}/stores`)
+    .then(r => r.ok ? r.json() : Promise.reject(new Error(`GET /stores ${r.status}`)))
+    .then(data => { if (Array.isArray(data.stores)) storeNames.value = data.stores })
+    .catch(err => console.warn('Store list unavailable:', err))
+})
+
 const receipts = computed(() => allReceipts.value.filter(r => r.status === 'COMPLETE'))
 
 // --- Sort & filter ---
@@ -157,6 +165,46 @@ async function saveEditDate(e, jobId) {
     savingDate.value = false
   }
 }
+
+// --- Edit vendor ---
+const editingVendorId = ref(null)
+const editVendorVal = ref('')
+const savingVendor = ref(false)
+const vendorEditError = ref(null)
+
+function startEditVendor(e, job) {
+  e.stopPropagation()
+  editingVendorId.value = job.jobId
+  editVendorVal.value = job.vendor || ''
+  vendorEditError.value = null
+}
+
+function cancelEditVendor(e) {
+  e.stopPropagation()
+  editingVendorId.value = null
+  vendorEditError.value = null
+}
+
+async function saveEditVendor(e, jobId) {
+  e.stopPropagation()
+  savingVendor.value = true
+  vendorEditError.value = null
+  try {
+    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts/${jobId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vendor: editVendorVal.value.trim() }),
+    })
+    if (!resp.ok) throw new Error(`Server returned ${resp.status}`)
+    const updated = await resp.json()
+    updateReceipt(jobId, { vendor: updated.vendor })
+    editingVendorId.value = null
+  } catch {
+    vendorEditError.value = 'Failed to save — try again.'
+  } finally {
+    savingVendor.value = false
+  }
+}
 </script>
 
 <template>
@@ -216,7 +264,38 @@ async function saveEditDate(e, jobId) {
 
             <!-- Normal row -->
             <tr v-else class="receipt-row" @click="router.push(`/receipt/${job.jobId}`)">
-              <td>{{ job.vendor || '—' }}</td>
+              <td class="vendor-cell">
+                <template v-if="editingVendorId === job.jobId">
+                  <div class="vendor-edit-row" @click.stop>
+                    <input
+                      type="text"
+                      list="vendor-store-options"
+                      v-model="editVendorVal"
+                      class="vendor-edit-input"
+                      autocomplete="off"
+                      placeholder="Type to search…"
+                    />
+                    <datalist id="vendor-store-options">
+                      <option v-for="name in storeNames" :key="name" :value="name" />
+                    </datalist>
+                    <button
+                      class="btn btn-primary save-vendor-btn"
+                      :disabled="savingVendor"
+                      @click="saveEditVendor($event, job.jobId)"
+                    >{{ savingVendor ? '…' : 'Save' }}</button>
+                    <button
+                      class="btn btn-secondary save-vendor-btn"
+                      :disabled="savingVendor"
+                      @click="cancelEditVendor($event)"
+                    >Cancel</button>
+                    <span v-if="vendorEditError" class="vendor-edit-error">{{ vendorEditError }}</span>
+                  </div>
+                </template>
+                <template v-else>
+                  <span class="vendor-text">{{ job.vendor || '—' }}</span>
+                  <button class="edit-vendor-btn" title="Edit store" @click="startEditVendor($event, job)">&#x270F;</button>
+                </template>
+              </td>
               <td>{{ job.storeCategory ? job.storeCategory.replace(/_/g, ' ') : '—' }}</td>
               <td class="date-cell">
                 <template v-if="editingDateId === job.jobId">
@@ -353,7 +432,8 @@ async function saveEditDate(e, jobId) {
 }
 
 .receipt-row:hover .delete-btn,
-.receipt-row:hover .edit-date-btn {
+.receipt-row:hover .edit-date-btn,
+.receipt-row:hover .edit-vendor-btn {
   opacity: 1;
 }
 
@@ -426,6 +506,51 @@ async function saveEditDate(e, jobId) {
 }
 
 .edit-date-btn:hover { color: var(--accent); }
+
+/* Vendor cell */
+.vendor-cell { white-space: nowrap; }
+
+.edit-vendor-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.25rem;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+  color: var(--muted);
+  line-height: 1;
+  vertical-align: middle;
+  margin-left: 0.2rem;
+}
+
+.edit-vendor-btn:hover { color: var(--accent); }
+
+.vendor-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.vendor-edit-input {
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: var(--text-sm);
+  background: var(--surface);
+  min-width: 10rem;
+}
+
+.save-vendor-btn {
+  font-size: var(--text-xs);
+  padding: 0.25rem 0.6rem;
+  white-space: nowrap;
+}
+
+.vendor-edit-error {
+  font-size: var(--text-xs);
+  color: var(--danger);
+}
 
 .date-edit-row {
   display: flex;
