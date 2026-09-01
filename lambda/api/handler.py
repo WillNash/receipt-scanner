@@ -73,6 +73,7 @@ class JobRecord:
     image_hash: str | None
     expires_at: int
     s3_key: str | None
+    matched_store: str | None = None
 
     @classmethod
     def from_dynamo(cls, item: dict) -> "JobRecord":
@@ -96,6 +97,7 @@ class JobRecord:
             image_hash=item.get("image_hash", {}).get("S"),
             expires_at=int(item.get("expires_at", {}).get("N", "0")),
             s3_key=item.get("s3_key", {}).get("S"),
+            matched_store=item.get("matched_store", {}).get("S"),
         )
 
 
@@ -557,6 +559,7 @@ def format_receipt(job: JobRecord, include_urls: bool = True) -> dict:
         "debugUrl": debug_url,
         "textractDebugUrl": textract_debug_url,
         "croppedImageUrl": cropped_image_url,
+        "matchedStore": job.matched_store,
         "hasCroppedImage": job.cropped_s3_key is not None,
         "createdAt": job.created_at,
         "updatedAt": job.updated_at,

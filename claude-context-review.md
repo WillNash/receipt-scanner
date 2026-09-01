@@ -1,86 +1,121 @@
 # Plan Review
 
 ## Verdict
-**NEEDS REVISION** — three flaws require correction before implementation begins. None invalidate the overall design, but two will produce incorrect runtime behaviour and one introduces unnecessary complexity that contradicts the codebase's own documented conventions.
+**NEEDS REVISION** — the plan has one unresolved contradiction between its own guidance and the researcher's API findings, plus two minor but consequential gaps in step specification. All structural assumptions (file locations, resource names, line references, dataclass shapes) are accurate and confirmed against the actual source code.
 
 ---
 
 ## Flaws Found
 
-- **Flaw 1 — Timeout relationship is inverted between plan and researcher source:** Step 2a specifies `[timeout:90]` as the Overpass server-side query budget and step 2b specifies `urlopen(req, timeout=95)` as the client socket timeout, framing the 5-second gap as deliberate so "the server always aborts first." However, the researcher's own Gotchas note (section 5, last bullet) states: "Add `[timeout:N]` in the Overpass query (N seconds) — must be at least as large as the HTTP client timeout." The Overpass server-side timeout must be >= the client socket timeout, not less than it. The researcher's own working code example (section 4) also demonstrates this: the query uses `[timeout:60]` while `urlopen` is called with `timeout=90`. When the server-side `[timeout:90]` fires at 90 s and the socket is set to 95 s, there is only a 5-second window for Overpass to write its error body and close the connection before the client's socket errors out with `socket.timeout`. Under any server load or network latency, the socket may time out first, raising `socket.timeout` (wrapped in `urllib.error.URLError`) — which is not caught by the plan's `urllib.error.HTTPError` handler and will produce an unhandled exception with no meaningful error message rather than a clean `sys.exit(1)`. The consequence: under a slow-server or slow-network condition the script will crash with an unhelpful traceback instead of surfacing the Overpass error cleanly. Fix: set the Overpass query to `[timeout:60]` and the socket timeout to `90`, matching the researcher's documented pattern, so the server always has time to complete or abort and write a response before the client disconnects.
+- **Flaw 1 — Tool schema type: plan and researcher directly contradict each other:**
+  The plan (Step 1, and the Risks & Blockers section) explicitly forbids `"type": ["string", "null"]` in the Bedrock tool spec, stating the Converse API "may raise a `ValidationException` for non-scalar type values." It instructs using `"type": "string"` only and encoding the no-match case as the sentinel string `"null"`.
 
-- **Flaw 2 — `batch_write_item` with hand-rolled retry contradicts the codebase's one-off script convention:** Step 2d specifies a full `batch_write_item` implementation: 25-item chunking, `UnprocessedItems` inspection, and an exponential-back-off retry loop. The explorer (section 3, "DynamoDB Write Patterns") explicitly documents that "the one-off scripts only use `put_item` / `scan` / `query`" and that `batch_write_item` appears only in the processor Lambda. The explorer's own recommendation for the new script (section 6B) says `dynamodb.put_item(TableName=TABLE, Item={...})` with no mention of batching. For the expected data volume (tens to a few hundred shops within a 10 km radius of Palmerston North), a simple `put_item` loop is correct, consistent with project conventions, and produces the same idempotency guarantee (`put_item` is an unconditional full-replace on matching key). The plan's batch approach adds approximately 40 lines of non-trivial retry logic with its own failure modes (the retry payload scoping issue noted in the previous review iteration) and diverges from the codebase pattern without any performance justification. Consequence if left in: increased implementation complexity, a higher surface area for bugs, and a script that reads differently from every other one-off script in the project.
+  The researcher document (section 2, Tool schema block) does the opposite: it specifies `"matched_name": { "type": ["string", "null"] }` as the recommended schema, with no qualification or warning about ValidationException.
 
-- **Flaw 3 — `out center tags;` framing in Step 2a and Risks item 1 is misleading:** Step 2a presents `out center tags;` as the preferred form and Risks item 1 defends it by claiming `out center;` "may also return tags in practice (the keyword is not always required)." This frames `tags` as a safety modifier. The researcher document (section 2) uses `out center;` without `tags` as the canonical working form, and the JSON response examples (section 1) show full tag data is present with `out center;`. In Overpass QL, `out center;` is equivalent to `out body center;` and includes tags by default in JSON output mode. The `tags` keyword is not a separate modifier that enables tag output — it is redundant in this position. Writing `out center tags;` is not standard documented Overpass QL syntax and could produce a parse warning or unexpected behaviour on some server versions. Consequence if the misleading framing is left in: the implementer believes `tags` is necessary for correctness and will keep it even if server-side warnings appear, instead of switching to the standard `out center;` form.
+  These two sources are in direct conflict. The plan's actual code sample (Step 1 prose) commits to the scalar string approach, while the researcher's schema commits to the array-union approach. Because the implementer is given both documents, this unresolved contradiction will force a runtime gamble. The existing `RECEIPT_TOOL` in `bedrock_extraction.py` (confirmed by reading the source) uses only scalar `"type"` values throughout — every property uses `"type": "string"` or `"type": "integer"`, never an array. Following codebase consistency strongly favours the scalar approach.
+
+  **Consequence if left unfixed:** If the implementer follows the researcher's schema and the Bedrock AU cross-region inference profile rejects array-type `"type"` values, every `_match_store()` call will raise a `ClientError`. Even though the call is wrapped in a try/except (as Step 5 correctly specifies), every receipt processed while this misconfiguration exists will log a `STORE_MATCH_ERROR` and store no matched_store — the feature is silently broken until the schema is fixed and the Lambda redeployed. Alternatively, if the implementer follows the plan's sentinel-string approach and `["string", "null"]` would have worked, unnecessary complexity is introduced (the sentinel mapping) and the model could theoretically return the string `"null"` for a store actually named "null".
+
+- **Flaw 2 — `_get_store_names()` cache-assignment behaviour for the empty-STORES_TABLE guard is underspecified:**
+  Step 3 says: "Returns `[]` if `STORES_TABLE` is empty (guards against missing env var)." It does not specify whether to assign `_STORES_CACHE = []` before returning or to return `[]` without touching the cache sentinel. This matters: if the early-return assigns `_STORES_CACHE = []`, then a subsequent redeployment that corrects the missing `STORES_TABLE` env var will never trigger a real scan within that execution environment's lifetime — the cache is permanently poisoned as an empty list until the environment is recycled. Conversely, if the early-return leaves `_STORES_CACHE = None`, the guard check runs on every invocation when `STORES_TABLE` is unset, which is a harmless no-op but leaves the sentinel in an unexpected state that a future reader of the code may find confusing.
+
+  **Consequence if left unfixed:** Low correctness risk under normal operations (env var will be set in production), but in a misconfigured deployment the cache could be permanently stale for the lifetime of any execution environment that ran before the env var was corrected, without any log warning.
+
+- **Flaw 3 — Step 6's `matched_store` insertion point into the `update_job(...)` dict is underspecified:**
+  Step 6 says to add the conditional spread "alongside the existing one for `cropped_s3_key`" at "lines 153-168." The actual file confirms the `cropped_s3_key` spread is on line 164. The plan's code sample shows the new spread inserted, but does not show its exact position relative to `"image_hash"` and `"updated_at"`. In a Python dict literal, trailing commas on preceding lines must be present; the instruction "alongside" is ambiguous about whether the new line goes before or after line 164's `cropped_s3_key` spread. While Python dict ordering is semantically irrelevant here, an implementer inserting after line 164 without ensuring the trailing comma is present (it is, in the actual code) could create a syntax error. The plan should show the exact two-line context for the insertion.
+
+  **Consequence if left unfixed:** Low risk (syntax errors fail immediately at import time), but the vagueness creates unnecessary ambiguity.
 
 ---
 
 ## Suggested Improvements
 
-- **Improvement 1 — Fix timeout ordering to match researcher's documented pattern:** In step 2a, change the `OVERPASS_QUERY` constant to `[timeout:60]`. In step 2b, change `urlopen(req, timeout=95)` to `urlopen(req, timeout=90)`. Update the explanatory text to state the correct relationship: "The client socket timeout (90 s) must exceed the server-side query timeout (60 s) so Overpass always finishes or aborts and writes a response body before the client closes the connection." Also add a second `except urllib.error.URLError` clause (after `HTTPError`) to catch network-level errors, printing `exc.reason` to stderr and calling `sys.exit(1)`.
+- **Improvement 1 — Commit explicitly to the scalar-type approach and explain why:**
+  Remove the "may raise" hedge from the Risks section and replace it with a definitive statement: "The `MATCH_STORE_TOOL` must use `"type": "string"` for `matched_name`, consistent with all other tool property declarations in `bedrock_extraction.py`. The researcher's example schema using `["string", "null"]` is JSON Schema-valid but has not been validated against the AU cross-region inference profile and conflicts with the established codebase pattern. The no-match case is handled by the `"null"` sentinel string." This closes the contradiction.
 
-- **Improvement 2 — Replace `batch_write_item` loop with simple `put_item` loop:** Rewrite step 2d as: iterate over elements, call `build_item(element)`, skip `None` results, call `dynamodb.put_item(TableName=table, Item=item)` for each, increment a counter, print progress to stderr every 50 items, catch `botocore.exceptions.ClientError` per item and print the error then re-raise. Remove all batching, chunking, `UnprocessedItems`, and exponential back-off logic. This matches the explicit codebase convention the explorer documented.
+- **Improvement 2 — Specify the cache-miss-on-empty-table behaviour explicitly in Step 3:**
+  Add one sentence: "If `STORES_TABLE` is empty, return `[]` immediately **without assigning `_STORES_CACHE`**, so that a redeployment adding the env var will trigger a fresh scan on the next cold start rather than reading a stale empty-list cache."
 
-- **Improvement 3 — Change `out center tags;` to `out center;`:** In step 2a's `OVERPASS_QUERY` constant, use `out center;`. Update Risks item 1 to state accurately: "`out center;` returns full tag data in JSON mode — the `tags` keyword is redundant and not needed."
+- **Improvement 3 — Show the exact insertion context for the `update_job` dict in Step 6:**
+  Replace "alongside the existing one for `cropped_s3_key`" with an explicit before/after, showing the new line inserted directly after the `cropped_s3_key` conditional spread (line 164) and before `"image_hash": dyn_s(image_hash)` (line 165):
+  ```python
+  **( {"cropped_s3_key": dyn_s(result.cropped_s3_key)} if result.cropped_s3_key else {} ),
+  **( {"matched_store": dyn_s(result.matched_store)} if result.matched_store else {} ),
+  "image_hash": dyn_s(image_hash),
+  ```
 
-- **Improvement 4 — Add `urllib.error.URLError` to the exception handler in `fetch_shops()`:** The plan only catches `urllib.error.HTTPError`. Network-level errors (DNS failure, connection timeout, socket timeout) raise `urllib.error.URLError`. Add a second except clause for `URLError` that prints `exc.reason` to stderr and calls `sys.exit(1)`. This is consistent with how `smoke_test.py` handles similar errors.
+- **Improvement 4 — Confirm the IAM `bedrock:InvokeModel` action covers `bedrock.converse()` explicitly:**
+  The plan states the existing `BedrockInvokeModel` statement "already covers the Haiku model via wildcard foundation-model and inference-profile ARNs — no change needed there." This is correct and confirmed by the actual `iam.tf`. However, since the `bedrock.converse()` SDK method may map to either `bedrock:InvokeModel` or a separate `bedrock:Converse` action depending on the API version, the plan should cite the existing working evidence: `_run_bedrock()` already calls `bedrock.converse()` successfully under the same IAM statement. This transforms an implicit assumption into a verified fact.
 
-- **Improvement 5 — Refine testing step 5 (idempotency check) wording:** The statement "the item count in DynamoDB must not increase" conflates idempotency with OSM data stability. A more accurate test: "Run the script a second time immediately. Confirm it exits 0 without errors. Spot-check a specific `store_id` written in the first run and confirm its attributes are intact and unchanged." OSM data is live, so a count comparison is not a reliable idempotency test.
+- **Improvement 5 — Testing strategy item 3 is mis-worded (cannot "rename" a DynamoDB table):**
+  The Testing Strategy item 3 says "Temporarily set `STORES_TABLE=\"\"` in a test invocation." This is correct. However, the prior review's version of this step mentioned "rename or empty the table" — if that wording survived into any test documentation, it should be corrected, since DynamoDB tables cannot be renamed. The plan as written only says to set the env var to empty, which is the right approach.
 
 ---
 
 ## Revised Steps (if applicable)
 
-**Revised Step 2a — OVERPASS_QUERY constant (timeout directive only):**
+**Revised Step 1 — Tool spec type declaration (replace the ambiguous guidance):**
+
+In `MATCH_STORE_TOOL`, declare `matched_name` as:
+```python
+"matched_name": {
+    "type": "string",
+    "description": (
+        "The exact string from the candidates list that best matches the OCR vendor. "
+        "Return the literal string 'null' if no store in the list is a confident match."
+    ),
+}
+```
+This is consistent with all other tool properties in `bedrock_extraction.py` and avoids the unvalidated array-type syntax. In the response parser, map `"null"` (case-insensitive) and empty string both to Python `None`:
+```python
+raw = (block["toolUse"]["input"].get("matched_name") or "").strip()
+return None if raw.lower() in ("null", "") else raw
+```
+Do not use `"type": ["string", "null"]` from the researcher's example — the established codebase convention is scalar-only type declarations.
+
+**Revised Step 3 — Cache function, empty-table guard (add one sentence):**
 
 ```python
-OVERPASS_QUERY = """\
-[out:json][timeout:60][maxsize:10000000];
-(
-  node["shop"](around:10000,-40.3523,175.6082);
-  way["shop"](around:10000,-40.3523,175.6082);
-);
-out center;
-"""
+_STORES_CACHE: list[str] | None = None
+
+def _get_store_names() -> list[str]:
+    global _STORES_CACHE
+    if _STORES_CACHE is not None:
+        return _STORES_CACHE
+    # Do NOT assign _STORES_CACHE here — leave sentinel as None so that
+    # a redeployment adding STORES_TABLE triggers a fresh scan on next cold start.
+    if not STORES_TABLE:
+        return []
+    names = []
+    kwargs = {
+        "TableName": STORES_TABLE,
+        "ProjectionExpression": "#n",
+        "ExpressionAttributeNames": {"#n": "name"},
+    }
+    while True:
+        resp = dynamodb.scan(**kwargs)
+        for item in resp.get("Items", []):
+            n = item.get("name", {}).get("S", "").strip()
+            if n:
+                names.append(n)
+        if "LastEvaluatedKey" not in resp:
+            break
+        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+    _STORES_CACHE = names
+    return _STORES_CACHE
 ```
 
-**Revised Step 2b — urlopen call and exception handling:**
+**Revised Step 6 — Exact insertion point in `update_job(...)` dict:**
 
+Insert the new conditional spread directly after the `cropped_s3_key` line and before `"image_hash"`:
 ```python
-try:
-    with urllib.request.urlopen(req, timeout=90) as resp:
-        data = json.load(resp)
-except urllib.error.HTTPError as exc:
-    print(f"ERROR: Overpass HTTP {exc.code}: {exc.read().decode()}", file=sys.stderr)
-    sys.exit(1)
-except urllib.error.URLError as exc:
-    print(f"ERROR: Network error reaching Overpass: {exc.reason}", file=sys.stderr)
-    sys.exit(1)
-
-remark = data.get("remark", "")
-if remark:
-    print(f"ERROR: Overpass remark: {remark}", file=sys.stderr)
-    sys.exit(1)
-elements = data.get("elements", [])
-if not elements:
-    print("WARNING: Overpass returned zero elements.", file=sys.stderr)
-return elements
+        **( {"cropped_s3_key": dyn_s(result.cropped_s3_key)} if result.cropped_s3_key else {} ),
+        **( {"matched_store": dyn_s(result.matched_store)} if result.matched_store else {} ),
+        "image_hash": dyn_s(image_hash),
 ```
-
-Explanation of timeout values: the client socket timeout (90 s) is larger than the server-side query budget (60 s). This ensures Overpass always finishes or aborts and writes a complete HTTP response before the client socket closes. The remark guard detects the HTTP-200 error case (Overpass encodes timeout/maxsize errors as HTTP 200 with a `remark` field and an empty `elements` list).
-
-**Revised Step 2d — upsert function (replace batch_write_item with put_item loop):**
-
-- Iterate over `elements`. For each element call `build_item(element)`; skip any that return `None`.
-- Call `dynamodb.put_item(TableName=table, Item=item)` for each item.
-- Catch `botocore.exceptions.ClientError` per call: print the error code and message to `sys.stderr` and re-raise so the caller sees the failure.
-- Increment a success counter after each successful call. Print progress to `sys.stderr` every 50 items (e.g., `"Upserted 50 / 200..."`).
-- Return the final count of successfully written items.
-
-This is the pattern used by all one-off scripts in the codebase (see explorer section 3). `put_item` is an unconditional full-replace on matching key, providing the same idempotency guarantee as `batch_write_item` PutRequests.
 
 ---
 
 ## Summary
 
-The plan correctly captures the Terraform table structure, the `project_name`/`terraform.tfvars` naming subtlety, the requirement for low-level `boto3.client`, the ambient-credentials pattern, and the important Overpass-specific guards (remark field, way centre coordinates, User-Agent). The three flaws — an inverted timeout relationship that contradicts the researcher's own documentation, unnecessary `batch_write_item` complexity that contradicts the codebase's one-off script convention, and a misleadingly framed Overpass output modifier — are all localised to steps 2a, 2b, and 2d. None require structural changes. Apply the revised steps above and implementation can safely begin.
+The plan is structurally sound: all file paths, resource names, dataclass shapes, line references, and sequencing are confirmed accurate against the actual source code. The one material flaw is an unresolved direct contradiction between the plan's tool schema guidance (scalar `"type": "string"`) and the researcher's example schema (`"type": ["string", "null"]`); this must be explicitly resolved in favour of the scalar approach (consistent with the existing `RECEIPT_TOOL` in the codebase) before implementation begins. The two remaining gaps — the empty-table cache-assignment behaviour and the update_job insertion-point ambiguity — are low-risk but should be tightened to prevent implementer uncertainty.

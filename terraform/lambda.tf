@@ -40,6 +40,7 @@ resource "aws_lambda_function" "bedrock_processor" {
       DYNAMODB_TABLE     = aws_dynamodb_table.jobs.name
       LINE_ITEMS_TABLE   = aws_dynamodb_table.line_items.name
       IMAGE_HASHES_TABLE = aws_dynamodb_table.image_hashes.name
+      STORES_TABLE       = aws_dynamodb_table.stores.name
       S3_UPLOADS_BUCKET  = aws_s3_bucket.uploads.bucket
       PRIMARY_REGION     = var.primary_region
       BEDROCK_MODEL_ID   = var.bedrock_model_id

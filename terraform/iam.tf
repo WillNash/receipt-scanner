@@ -102,6 +102,12 @@ resource "aws_iam_role_policy" "lambda_processor" {
         Action = ["dynamodb:GetItem", "dynamodb:PutItem"]
         Resource = aws_dynamodb_table.image_hashes.arn
       },
+      {
+        Sid    = "StoresRead"
+        Effect = "Allow"
+        Action = ["dynamodb:Scan"]
+        Resource = aws_dynamodb_table.stores.arn
+      },
     ]
   })
 }

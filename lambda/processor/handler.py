@@ -25,6 +25,7 @@ from bedrock_extraction import (
     _validate_classification,
     _fix_weighted_item_prices,
     _compute_net_prices,
+    _match_store,
 )
 
 class _TransientError(Exception):
@@ -46,11 +47,13 @@ class ReceiptAnalysis:
     debug_s3_key: str
     textract_debug_s3_key: str
     cropped_s3_key: str | None = None
+    matched_store: str | None = None
 
 
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
 LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
 IMAGE_HASHES_TABLE = os.environ.get("IMAGE_HASHES_TABLE", "")
+STORES_TABLE = os.environ.get("STORES_TABLE", "")
 S3_BUCKET = os.environ["S3_UPLOADS_BUCKET"]
 PRIMARY_REGION = os.environ.get("PRIMARY_REGION", "ap-southeast-2")
 
@@ -64,6 +67,33 @@ import textract_pipeline as _tp
 import bedrock_extraction as _be
 _tp.set_textract_client(textract)
 _be.set_bedrock_client(bedrock)
+
+_STORES_CACHE: list[str] | None = None
+
+
+def _get_store_names() -> list[str]:
+    global _STORES_CACHE
+    if _STORES_CACHE is not None:
+        return _STORES_CACHE
+    if not STORES_TABLE:
+        return []
+    names = []
+    kwargs: dict = {
+        "TableName": STORES_TABLE,
+        "ProjectionExpression": "#n",
+        "ExpressionAttributeNames": {"#n": "name"},
+    }
+    while True:
+        resp = dynamodb.scan(**kwargs)
+        for item in resp.get("Items", []):
+            n = item.get("name", {}).get("S", "").strip()
+            if n:
+                names.append(n)
+        if "LastEvaluatedKey" not in resp:
+            break
+        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+    _STORES_CACHE = names
+    return _STORES_CACHE
 
 
 def lambda_handler(event, context):
@@ -162,6 +192,7 @@ def _process_s3_record(bucket: str, key: str, job_id: str) -> None:
         "debug_s3_key": dyn_s(result.debug_s3_key),
         "textract_debug_s3_key": dyn_s(result.textract_debug_s3_key),
         **( {"cropped_s3_key": dyn_s(result.cropped_s3_key)} if result.cropped_s3_key else {} ),
+        **( {"matched_store": dyn_s(result.matched_store)} if result.matched_store else {} ),
         "image_hash": dyn_s(image_hash),
         "updated_at": dyn_s(now_iso()),
         "expires_at": dyn_n(expiry),
@@ -269,6 +300,17 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
     if price_check["warning"]:
         print(f"PRICE_CHECK_WARNING {price_check}")
 
+    try:
+        raw_vendor = extracted.get("vendor") or ""
+        matched_store = _match_store(raw_vendor, _get_store_names())
+        if matched_store:
+            print(f"STORE_MATCH raw={raw_vendor!r} matched={matched_store!r}")
+        else:
+            print(f"STORE_MATCH raw={raw_vendor!r} no_match")
+    except Exception as exc:
+        print(f"STORE_MATCH_ERROR vendor={extracted.get('vendor')!r} error={exc}")
+        matched_store = None
+
     claude_debug_key, textract_debug_key = _save_debug_payloads(
         job_id, user_id, tr, skew, correction, deskew_applied, extracted, usage, price_check, SKEW_THRESHOLD,
     )
@@ -284,6 +326,7 @@ def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data
         debug_s3_key=claude_debug_key,
         textract_debug_s3_key=textract_debug_key,
         cropped_s3_key=cropped_key,
+        matched_store=matched_store,
     )
 
 

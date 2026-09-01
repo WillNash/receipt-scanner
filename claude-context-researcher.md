@@ -1,135 +1,129 @@
-# Research Findings — Overpass API & DynamoDB Upsert
+# Research Findings — Haiku Store Matching via Bedrock
 
 ## Sources
-- [Overpass API - OpenStreetMap Wiki](https://wiki.openstreetmap.org/wiki/Overpass_API)
-- [Overpass API/Overpass QL - OpenStreetMap Wiki](https://wiki.openstreetmap.org/wiki/Overpass_API/Overpass_QL)
-- [Overpass API by Example - OpenStreetMap Wiki](https://wiki.openstreetmap.org/wiki/Overpass_API/Overpass_API_by_Example)
-- [boto3 DynamoDB batch_writer docs](https://docs.aws.amazon.com/boto3/latest/reference/services/dynamodb/table/batch_writer.html)
-- [boto3 DynamoDB update_item docs](https://docs.aws.amazon.com/boto3/latest/reference/services/dynamodb/table/update_item.html)
-- [DynamoDB PutItem vs UpdateItem - Dynobase](https://dynobase.dev/dynamodb-putitem-vs-updateitem/)
+- [Claude Haiku 4.5 - Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html)
+- [Invoke Anthropic Claude on Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-runtime_example_bedrock-runtime_InvokeModel_AnthropicClaude_section.html)
+- [Best practices for querying DynamoDB](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/QueryAndScanGuidelines.html)
+- [boto3 DynamoDB scan](https://docs.aws.amazon.com/boto3/latest/reference/services/dynamodb/table/scan.html)
+- [Lambda execution environment lifecycle](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html)
 
 ---
 
-## 1. Overpass API
+## 1. Claude Haiku via Bedrock — Model IDs and Region Availability
 
-The Overpass API is a read-only HTTP API for querying OpenStreetMap data. Queries are written in Overpass QL and submitted as an HTTP POST with the query string in a `data` form field.
+| Model | Model ID | Status |
+|---|---|---|
+| Claude 3 Haiku | `anthropic.claude-3-haiku-20240307-v1:0` | Active, in-region ap-southeast-2 |
+| Claude 3.5 Haiku | `anthropic.claude-3-5-haiku-20241022-v1:0` | Legacy, EOL June 2026 |
+| Claude Haiku 4.5 | `au.anthropic.claude-haiku-4-5-20251001-v1:0` | Active, AU cross-region profile |
 
-**Public endpoints (no auth):**
-- `https://overpass-api.de/api/interpreter` — primary global instance, most reliable
-- `https://overpass.private.coffee/api/interpreter` — community mirror
+The existing processor already uses `au.anthropic.claude-haiku-4-5-20251001-v1:0` via the `BEDROCK_MODEL_ID` env var. The store matching call should use the same `BEDROCK_MODEL_ID` — no new model ID needed.
 
-**Rate limiting / etiquette:**
-- Stay under 10,000 queries/day and 1 GB/day.
-- Always send an identifying `User-Agent` header.
-- No parallel requests from the same script.
-- On HTTP 429 or 406, pause 30 seconds before retrying.
+The existing processor uses `bedrock.converse()` with `toolConfig` to force structured JSON output. The store-matching call should follow the same pattern for consistency.
 
-**JSON response — node element:**
+---
+
+## 2. Fuzzy Store Name Matching — Prompt Design
+
+Use `converse()` with a tool to force structured output. JSON with `null` for no-match is unambiguous.
+
+**System prompt:**
+```
+You are a store name matcher. Given a raw OCR string from a receipt and a list of
+known store names, identify the best match.
+
+Rules:
+- Ignore store branch numbers (e.g., '#47'), abbreviations, punctuation differences, and spacing.
+- Match on the core brand name (e.g., 'PAK N SAVE' matches 'Pak'nSave').
+- If no store in the list is a plausible match, return null for matched_name.
+- Respond ONLY with the tool call. No explanation.
+```
+
+**Tool schema:**
 ```json
 {
-  "type": "node",
-  "id": 123456789,
-  "lat": -40.3523,
-  "lon": 175.6082,
-  "tags": {
-    "name": "New World Palmerston North",
-    "shop": "supermarket",
-    "addr:street": "Main Street"
+  "name": "match_store",
+  "description": "Return the best-matching store name or null",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "matched_name": {
+        "type": ["string", "null"],
+        "description": "Exact string from the candidates list, or null if no match"
+      }
+    },
+    "required": ["matched_name"]
   }
 }
 ```
 
-**JSON response — way element (with `out center`):**
-```json
-{
-  "type": "way",
-  "id": 987654321,
-  "center": { "lat": -40.3510, "lon": 175.6100 },
-  "tags": {
-    "name": "Pak'nSave Palmerston North",
-    "shop": "supermarket"
-  }
-}
+**User message:**
+```
+OCR string: "PAK N SAVE #47"
+
+Known store names:
+- Pak'nSave Palmerston North
+- New World Palmerston North
+
+Return the tool call.
 ```
 
-Ways do NOT have top-level `lat`/`lon`. `out center` returns a bounding-box centroid per way.
+**Response parsing:** iterate `response["output"]["message"]["content"]` for a `toolUse` block, extract `input["matched_name"]`. Returns `None` (Python) if JSON null.
 
 ---
 
-## 2. Overpass QL Query
+## 3. DynamoDB Scan — Full Table Read
 
-```
-[out:json][timeout:60][maxsize:10000000];
-(
-  node["shop"](around:10000,-40.3523,175.6082);
-  way["shop"](around:10000,-40.3523,175.6082);
-);
-out center;
-```
+For a small table (hundreds of items), full scan with no filter is correct. Always use the pagination loop even for small tables — DynamoDB can return a subset even under 1 MB.
 
-- `around:10000` = 10,000 m = 10 km radius
-- `out center` gives `lat`/`lon` on nodes and `center.lat`/`center.lon` on ways
-- `[maxsize:10000000]` caps response to 10 MB
+Use `ProjectionExpression` to fetch only the `name` attribute, reducing bandwidth:
 
----
-
-## 3. boto3 DynamoDB — upsert and bulk writes
-
-**put_item vs update_item:**
-- `put_item` replaces the entire item. Attributes not included are deleted if item already exists.
-- `update_item` with `SET` UpdateExpression is the correct upsert: creates if missing, updates only named attributes if exists.
-
-**batch_writer:**
-- Chunks writes into batches of 25, up to 16 MB per batch.
-- Automatically retries unprocessed items.
-- Only supports `put_item` (full replace) and `delete_item`. Does NOT support `update_item`.
-- For a one-shot seed script where full-replace is acceptable, `batch_writer` is the right choice.
-
-**boto3 — batch_writer example:**
 ```python
-with table.batch_writer() as batch:
-    for shop in shops:
-        tags = shop.get("tags", {})
-        if shop["type"] == "node":
-            lat, lon = str(shop["lat"]), str(shop["lon"])
-        else:
-            lat = str(shop["center"]["lat"])
-            lon = str(shop["center"]["lon"])
-        batch.put_item(Item={
-            "store_id": f"{shop['type']}/{shop['id']}",
-            "osm_type": shop["type"],
-            "name": tags.get("name", ""),
-            "shop_type": tags.get("shop", ""),
-            "lat": lat,
-            "lon": lon,
-        })
+def load_store_names(client, table_name: str) -> list[str]:
+    names = []
+    kwargs = {
+        "TableName": table_name,
+        "ProjectionExpression": "#n",
+        "ExpressionAttributeNames": {"#n": "name"},  # 'name' is a reserved word
+    }
+    while True:
+        resp = client.scan(**kwargs)
+        for item in resp.get("Items", []):
+            n = item.get("name", {}).get("S", "").strip()
+            if n:
+                names.append(n)
+        if "LastEvaluatedKey" not in resp:
+            break
+        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+    return names
 ```
+
+Note: `name` is a DynamoDB reserved word — must use `ExpressionAttributeNames` alias.
 
 ---
 
-## 4. requests vs urllib.request
+## 4. Module-Level Cache Pattern
 
-- `requests` is third-party; must be pip-installed.
-- `urllib.request` is stdlib (already used in `scripts/smoke_test.py`).
-- For a local one-off script, `urllib.request` avoids requiring a pip install.
-- `urllib.request` POST with form-encoded body:
+Simple sentinel pattern — no TTL needed since stores data is refreshed weekly by a separate Lambda. The processor already uses `batch_size=1` on SQS so concurrency conflicts are not a concern.
+
 ```python
-import urllib.request, urllib.parse
-body = urllib.parse.urlencode({"data": QUERY}).encode()
-req = urllib.request.Request(
-    "https://overpass-api.de/api/interpreter",
-    data=body,
-    headers={"User-Agent": "receipt-scanner-store-scraper/1.0"},
-)
-with urllib.request.urlopen(req, timeout=90) as resp:
-    data = json.load(resp)
+_STORE_NAMES: list[str] | None = None
+
+def _get_store_names() -> list[str]:
+    global _STORE_NAMES
+    if _STORE_NAMES is None:
+        _STORE_NAMES = load_store_names(dynamodb, os.environ.get("STORES_TABLE", ""))
+    return _STORE_NAMES
 ```
+
+**Gotchas:**
+- Cache is per-execution-environment, not shared across concurrent Lambda instances.
+- Cache is lost on environment recycle (typically every few hours or after idle period).
+- Only cache read-only, non-user-specific data at module level.
+- `name` is a DynamoDB reserved word — ProjectionExpression requires ExpressionAttributeNames alias.
 
 ---
 
-## 5. Gotchas
+## 5. Stored Field Name
 
-- boto3 resource API does NOT accept Python `float`. Use `Decimal` or store as strings to avoid `TypeError: Float types are not supported`. Storing lat/lon as strings is simplest.
-- `put_item` silently deletes attributes not in the call when item already exists — safe for a seed script since all attributes are always written.
-- Ways don't have top-level `lat`/`lon` — must check `el["type"]` and use `el["center"]["lat"]` for ways.
-- Add `[timeout:N]` in the Overpass query (N seconds) — must be at least as large as the HTTP client timeout.
+The stores table items use `name` for the canonical store name (set by `populate_stores.py` and `stores_refresh/handler.py`). Items with empty `name` (unnamed OSM shops) should be filtered out before building the candidate list.
