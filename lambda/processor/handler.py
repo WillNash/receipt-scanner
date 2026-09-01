@@ -240,14 +240,18 @@ def _save_debug_payloads(
 
 def analyze_receipt(bucket: str, key: str, job_id: str, user_id: str, image_data: bytes | None = None) -> ReceiptAnalysis:
     SKEW_THRESHOLD = 1.0  # degrees — below this, noise outweighs benefit
+    TEXTRACT_LIMIT = 9 * 1024 * 1024  # 9 MB — leave headroom below the 10 MB hard limit
 
-    cropped_key = crop_receipt(s3, bucket, key, image_data=image_data)
+    raw = image_data or s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+    data = _to_jpeg(raw)
 
-    if cropped_key:
-        data = s3.get_object(Bucket=bucket, Key=cropped_key)["Body"].read()
+    if len(data) >= TEXTRACT_LIMIT:
+        cropped_key = crop_receipt(s3, bucket, key, image_data=raw)
+        if cropped_key:
+            data = s3.get_object(Bucket=bucket, Key=cropped_key)["Body"].read()
     else:
-        raw = image_data or s3.get_object(Bucket=bucket, Key=key)["Body"].read()
-        data = _to_jpeg(raw)
+        print(f"CROP_SKIPPED: {len(data) // 1024}KB fits within Textract limit — skipping crop")
+        cropped_key = None
 
     final_data, tr, skew, correction, deskew_applied = _run_deskew_pipeline(data, SKEW_THRESHOLD)
 

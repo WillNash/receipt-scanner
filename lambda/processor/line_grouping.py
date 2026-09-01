@@ -170,6 +170,8 @@ def group_blocks(blocks: list) -> tuple[list[list], float, float]:
         for j, other in enumerate(rows):
             if j == i or id(other[0]) in no_price_ids:
                 continue
+            if any(_left(b) > price_col for b in other):
+                continue
             gap = min(abs(_flat(b) - orphan_y) for b in other)
             if gap <= step_tol * 2 and gap < best_gap:
                 best_gap, best_j = gap, j

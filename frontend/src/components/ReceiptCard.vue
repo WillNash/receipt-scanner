@@ -14,7 +14,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['edit'])
+const emit = defineEmits(['edit', 'deleted'])
 
 const apiFetch = inject('apiFetch', null)
 const CONFIG = inject('CONFIG', null)
@@ -23,16 +23,18 @@ const showDebug = ref(false)
 
 // URLs may be absent from list responses — load them lazily on first action click.
 const loadedUrls = ref({
+  imageUrl: props.job.imageUrl ?? null,
   debugUrl: props.job.debugUrl ?? null,
   textractDebugUrl: props.job.textractDebugUrl ?? null,
   croppedImageUrl: props.job.croppedImageUrl ?? null,
 })
 const urlsFetched = ref(
-  !!(props.job.debugUrl || props.job.textractDebugUrl || props.job.croppedImageUrl)
+  !!(props.job.imageUrl || props.job.debugUrl || props.job.textractDebugUrl || props.job.croppedImageUrl)
 )
 
 const items = computed(() => (Array.isArray(props.job.items) ? props.job.items : []))
 const hasDiscount = computed(() => items.value.some(it => it.discount))
+const hasCategory = computed(() => items.value.some(it => it.item_category))
 
 const categoryLabel = computed(() => {
   if (!props.job.storeCategory) return ''
@@ -56,6 +58,7 @@ async function fetchUrls() {
     if (!resp.ok) return
     const data = await resp.json()
     loadedUrls.value = {
+      imageUrl: data.imageUrl ?? null,
       debugUrl: data.debugUrl ?? null,
       textractDebugUrl: data.textractDebugUrl ?? null,
       croppedImageUrl: data.croppedImageUrl ?? null,
@@ -64,6 +67,11 @@ async function fetchUrls() {
   } catch (e) {
     console.error('Failed to fetch job URLs:', e)
   }
+}
+
+async function openImage() {
+  await fetchUrls()
+  if (loadedUrls.value.imageUrl) window.open(loadedUrls.value.imageUrl, '_blank')
 }
 
 async function openCroppedImage() {
@@ -79,6 +87,24 @@ async function openDebugJson() {
 async function toggleDebug() {
   if (!showDebug.value) await fetchUrls()
   showDebug.value = !showDebug.value
+}
+
+const confirmingDelete = ref(false)
+const deleting = ref(false)
+const deleteError = ref('')
+
+async function doDelete() {
+  deleting.value = true
+  deleteError.value = ''
+  try {
+    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts/${props.job.jobId}`, { method: 'DELETE' })
+    if (!resp.ok) throw new Error(`Server returned ${resp.status}`)
+    emit('deleted', props.job.jobId)
+  } catch (err) {
+    deleteError.value = 'Failed to delete — try again.'
+  } finally {
+    deleting.value = false
+  }
 }
 </script>
 
@@ -116,6 +142,7 @@ async function toggleDebug() {
       <thead>
         <tr>
           <th>Item</th>
+          <th v-if="hasCategory">Category</th>
           <th>Qty</th>
           <th>Unit price</th>
           <th v-if="hasDiscount">Discount</th>
@@ -128,6 +155,7 @@ async function toggleDebug() {
             {{ it.description }}
             <span v-if="it.package_size" class="pkg-size">{{ it.package_size }}</span>
           </td>
+          <td v-if="hasCategory" class="item-category">{{ it.item_category ? it.item_category.replace(/_/g, ' ') : '' }}</td>
           <td>{{ it.quantity }}</td>
           <td>{{ it.unit_price }}</td>
           <td v-if="hasDiscount">{{ it.discount || '' }}</td>
@@ -139,6 +167,9 @@ async function toggleDebug() {
     <!-- Action bar: URLs are loaded lazily from GET /jobs/{jobId} on first click -->
     <template v-if="canShowActions">
       <div class="action-bar">
+        <button class="btn btn-secondary action-btn" @click="openImage">
+          Download image
+        </button>
         <button v-if="hasCropped" class="btn btn-secondary action-btn" @click="openCroppedImage">
           Cropped image
         </button>
@@ -157,17 +188,31 @@ async function toggleDebug() {
       :job-id="job.jobId"
     />
 
-    <button
-      v-if="showActions"
-      class="btn btn-secondary edit-btn"
-      @click="emit('edit', job)"
-    >
-      Edit
-    </button>
+    <div v-if="showActions" class="card-footer">
+      <button class="btn btn-secondary edit-btn" @click="emit('edit', job)">Edit</button>
+      <button class="btn btn-danger-outline delete-btn" @click="confirmingDelete = true">Delete</button>
+    </div>
+
+    <div v-if="confirmingDelete" class="delete-confirm">
+      <span class="delete-confirm-text">Delete this receipt permanently?</span>
+      <span v-if="deleteError" class="delete-confirm-error">{{ deleteError }}</span>
+      <div class="delete-confirm-actions">
+        <button class="btn btn-secondary confirm-btn" :disabled="deleting" @click="confirmingDelete = false; deleteError = ''">Cancel</button>
+        <button class="btn btn-danger confirm-btn" :disabled="deleting" @click="doDelete">
+          {{ deleting ? 'Deleting…' : 'Delete' }}
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.item-category {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
 .action-bar {
   margin-top: 0.5rem;
   display: flex;
@@ -178,8 +223,62 @@ async function toggleDebug() {
 .action-btn {
   font-size: 0.8rem;
 }
-.edit-btn {
+.card-footer {
   margin-top: 0.5rem;
+  display: flex;
+  gap: 0.5rem;
+}
+.edit-btn,
+.delete-btn {
   font-size: 0.8rem;
+}
+.btn-danger-outline {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+.btn-danger-outline:hover {
+  background: var(--danger-surface);
+}
+.delete-confirm {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--danger-surface);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.delete-confirm-text {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--danger);
+  flex: 1;
+}
+.delete-confirm-error {
+  font-size: var(--text-xs);
+  color: var(--danger);
+  width: 100%;
+}
+.delete-confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+.confirm-btn {
+  font-size: var(--text-xs);
+  padding: 0.3rem 0.75rem;
+}
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+}
+.btn-danger:hover:not(:disabled) {
+  background: #b71c1c;
+}
+.btn-danger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 </style>

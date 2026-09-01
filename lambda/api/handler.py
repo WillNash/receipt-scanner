@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import re
@@ -150,7 +151,8 @@ def _route(method: str, path: str, user_id: str, user_email: str, event: dict):
     if method == "POST" and path.endswith("/upload-url"):
         return handle_upload_url(event, user_id, user_email)
     if method == "GET" and path.endswith("/receipts"):
-        return handle_list_receipts(user_id)
+        cursor = (event.get("queryStringParameters") or {}).get("lastKey")
+        return handle_list_receipts(user_id, cursor)
     if method == "GET" and "/jobs/" in path:
         return handle_get_job(job_id, user_id)
     if method == "DELETE" and "/receipts/" in path:
@@ -269,11 +271,18 @@ def handle_upload_url(event, user_id: str, user_email: str):
     return make_response(200, {"jobId": job_id, "uploadUrl": upload_url, "s3Key": s3_key})
 
 
-def handle_list_receipts(user_id: str):
+def handle_list_receipts(user_id: str, cursor: str | None = None):
     # DynamoDB applies Limit before FilterExpression, so paginate until we have
     # RECEIPTS_PAGE_SIZE COMPLETE results or the GSI is exhausted.
     receipts = []
     last_key = None
+
+    if cursor:
+        try:
+            last_key = json.loads(base64.b64decode(cursor).decode())
+        except Exception:
+            raise _HttpError(400, {"error": "Invalid cursor"})
+
     while len(receipts) < RECEIPTS_PAGE_SIZE:
         kwargs = {
             "TableName": DYNAMODB_TABLE,
@@ -295,7 +304,11 @@ def handle_list_receipts(user_id: str):
         last_key = result.get("LastEvaluatedKey")
         if not last_key:
             break
-    return make_response(200, {"receipts": receipts})
+
+    next_cursor = (
+        base64.b64encode(json.dumps(last_key).encode()).decode() if last_key else None
+    )
+    return make_response(200, {"receipts": receipts, "lastKey": next_cursor})
 
 
 def _fetch_job_item(job_id: str | None, user_id: str) -> dict:
@@ -510,6 +523,7 @@ def format_receipt(job: JobRecord, include_urls: bool = True) -> dict:
     debug_url = None
     textract_debug_url = None
     cropped_image_url = None
+    image_url = None
 
     if include_urls:
         def presign(key, filename):
@@ -519,6 +533,9 @@ def format_receipt(job: JobRecord, include_urls: bool = True) -> dict:
                         "ResponseContentDisposition": f"attachment; filename={filename}"},
                 ExpiresIn=PRESIGNED_GET_TTL_SECONDS,
             )
+        if job.s3_key:
+            ext = job.s3_key.rsplit(".", 1)[-1] if "." in job.s3_key else "jpg"
+            image_url = presign(job.s3_key, f"receipt_{job.job_id}.{ext}")
         if job.debug_s3_key:
             debug_url = presign(job.debug_s3_key, f"claude_{job.job_id}.json")
         if job.textract_debug_s3_key:
@@ -536,6 +553,7 @@ def format_receipt(job: JobRecord, include_urls: bool = True) -> dict:
         "items": line_items,
         "priceCheckWarning": job.price_check_warning,
         "priceCheckMessage": job.price_check_message,
+        "imageUrl": image_url,
         "debugUrl": debug_url,
         "textractDebugUrl": textract_debug_url,
         "croppedImageUrl": cropped_image_url,
