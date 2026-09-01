@@ -1,8 +1,9 @@
 <script setup>
 import { ref, computed, inject, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { formatDate } from '../utils.js'
+import { formatDate, parseCurrency } from '../utils.js'
 import { useReceipts } from '../composables/useReceipts.js'
+import { useInlineEdit } from '../composables/useInlineEdit.js'
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 function isIsoDate(date) {
@@ -42,31 +43,25 @@ const filtered = computed(() => {
   return receipts.value.filter(r => r.vendor === filterStore.value)
 })
 
+const SORT_EXTRACTORS = {
+  vendor:      r => (r.vendor || '').toLowerCase(),
+  receiptDate: r => r.receiptDate || '',
+  total:       r => parseCurrency(r.total),
+}
+
 const sorted = computed(() => {
+  const extract = SORT_EXTRACTORS[sortField.value] ?? (() => '')
+  const dir = sortDir.value === 'asc' ? 1 : -1
   return [...filtered.value].sort((a, b) => {
-    let av, bv
-    if (sortField.value === 'vendor') {
-      av = (a.vendor || '').toLowerCase()
-      bv = (b.vendor || '').toLowerCase()
-    } else if (sortField.value === 'receiptDate') {
-      av = a.receiptDate || ''
-      bv = b.receiptDate || ''
-    } else if (sortField.value === 'total') {
-      av = parseFloat((a.total || '0').replace(/[^0-9.-]/g, '')) || 0
-      bv = parseFloat((b.total || '0').replace(/[^0-9.-]/g, '')) || 0
-    }
-    if (av < bv) return sortDir.value === 'asc' ? -1 : 1
-    if (av > bv) return sortDir.value === 'asc' ? 1 : -1
-    return 0
+    const av = extract(a), bv = extract(b)
+    return av < bv ? -dir : av > bv ? dir : 0
   })
 })
 
 // --- Pagination ---
 const PAGE_SIZE = 20
 const currentPage = ref(1)
-
 const totalPages = computed(() => Math.max(1, Math.ceil(sorted.value.length / PAGE_SIZE)))
-
 const paginated = computed(() => {
   const start = (currentPage.value - 1) * PAGE_SIZE
   return sorted.value.slice(start, start + PAGE_SIZE)
@@ -97,20 +92,17 @@ const confirmingId = ref(null)
 const deletingId = ref(null)
 const deleteError = ref(null)
 
-function startDelete(e, jobId) {
-  e.stopPropagation()
+function startDelete(jobId) {
   deleteError.value = null
   confirmingId.value = jobId
 }
 
-function cancelDelete(e) {
-  e.stopPropagation()
+function cancelDelete() {
   confirmingId.value = null
   deleteError.value = null
 }
 
-async function confirmDelete(e, jobId) {
-  e.stopPropagation()
+async function confirmDelete(jobId) {
   deletingId.value = jobId
   deleteError.value = null
   try {
@@ -119,92 +111,29 @@ async function confirmDelete(e, jobId) {
     removeReceipt(jobId)
     confirmingId.value = null
   } catch {
-    deleteError.value = { jobId, message: 'Failed to delete — try again.' }
+    deleteError.value = 'Failed to delete — try again.'
   } finally {
     deletingId.value = null
   }
 }
 
-// --- Edit date ---
-const editingDateId = ref(null)
-const editDateVal = ref('')
-const savingDate = ref(false)
-const dateEditError = ref(null)
+// --- Inline edits ---
+const {
+  editingId: dateEditingId, editVal: dateEditVal, saving: dateSaving, error: dateEditError,
+  startEdit: startDateEdit, cancelEdit: cancelDateEdit, saveEdit: saveDateEdit,
+} = useInlineEdit(apiFetch, CONFIG, updateReceipt, {
+  fieldName: 'receiptDate',
+  getInitialValue: job => isIsoDate(job.receiptDate) ? job.receiptDate : '',
+})
 
-function startEditDate(e, job) {
-  e.stopPropagation()
-  editingDateId.value = job.jobId
-  editDateVal.value = isIsoDate(job.receiptDate) ? job.receiptDate : ''
-  dateEditError.value = null
-}
-
-function cancelEditDate(e) {
-  e.stopPropagation()
-  editingDateId.value = null
-  dateEditError.value = null
-}
-
-async function saveEditDate(e, jobId) {
-  e.stopPropagation()
-  if (!editDateVal.value) return
-  savingDate.value = true
-  dateEditError.value = null
-  try {
-    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts/${jobId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ receiptDate: editDateVal.value }),
-    })
-    if (!resp.ok) throw new Error(`Server returned ${resp.status}`)
-    const updated = await resp.json()
-    updateReceipt(jobId, { receiptDate: updated.receiptDate })
-    editingDateId.value = null
-  } catch {
-    dateEditError.value = 'Failed to save — try again.'
-  } finally {
-    savingDate.value = false
-  }
-}
-
-// --- Edit vendor ---
-const editingVendorId = ref(null)
-const editVendorVal = ref('')
-const savingVendor = ref(false)
-const vendorEditError = ref(null)
-
-function startEditVendor(e, job) {
-  e.stopPropagation()
-  editingVendorId.value = job.jobId
-  editVendorVal.value = job.vendor || ''
-  vendorEditError.value = null
-}
-
-function cancelEditVendor(e) {
-  e.stopPropagation()
-  editingVendorId.value = null
-  vendorEditError.value = null
-}
-
-async function saveEditVendor(e, jobId) {
-  e.stopPropagation()
-  savingVendor.value = true
-  vendorEditError.value = null
-  try {
-    const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts/${jobId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ vendor: editVendorVal.value.trim() }),
-    })
-    if (!resp.ok) throw new Error(`Server returned ${resp.status}`)
-    const updated = await resp.json()
-    updateReceipt(jobId, { vendor: updated.vendor })
-    editingVendorId.value = null
-  } catch {
-    vendorEditError.value = 'Failed to save — try again.'
-  } finally {
-    savingVendor.value = false
-  }
-}
+const {
+  editingId: vendorEditingId, editVal: vendorEditVal, saving: vendorSaving, error: vendorEditError,
+  startEdit: startVendorEdit, cancelEdit: cancelVendorEdit, saveEdit: saveVendorEdit,
+} = useInlineEdit(apiFetch, CONFIG, updateReceipt, {
+  fieldName: 'vendor',
+  getInitialValue: job => job.vendor || '',
+  transformValue: v => v.trim(),
+})
 </script>
 
 <template>
@@ -243,19 +172,17 @@ async function saveEditVendor(e, jobId) {
               <td colspan="5">
                 <div class="confirm-inner">
                   <span class="confirm-text">Delete this receipt permanently?</span>
-                  <span v-if="deleteError?.jobId === job.jobId" class="confirm-error">
-                    {{ deleteError.message }}
-                  </span>
+                  <span v-if="deleteError" class="confirm-error">{{ deleteError }}</span>
                   <div class="confirm-actions">
                     <button
                       class="btn btn-secondary confirm-btn"
                       :disabled="deletingId === job.jobId"
-                      @click="cancelDelete($event)"
+                      @click.stop="cancelDelete()"
                     >Cancel</button>
                     <button
                       class="btn btn-danger confirm-btn"
                       :disabled="deletingId === job.jobId"
-                      @click="confirmDelete($event, job.jobId)"
+                      @click.stop="confirmDelete(job.jobId)"
                     >{{ deletingId === job.jobId ? 'Deleting…' : 'Delete' }}</button>
                   </div>
                 </div>
@@ -265,13 +192,13 @@ async function saveEditVendor(e, jobId) {
             <!-- Normal row -->
             <tr v-else class="receipt-row" @click="router.push(`/receipt/${job.jobId}`)">
               <td class="vendor-cell">
-                <template v-if="editingVendorId === job.jobId">
-                  <div class="vendor-edit-row" @click.stop>
+                <template v-if="vendorEditingId === job.jobId">
+                  <div class="field-edit-row" @click.stop>
                     <input
                       type="text"
                       list="vendor-store-options"
-                      v-model="editVendorVal"
-                      class="vendor-edit-input"
+                      v-model="vendorEditVal"
+                      class="field-edit-input"
                       autocomplete="off"
                       placeholder="Type to search…"
                     />
@@ -279,53 +206,53 @@ async function saveEditVendor(e, jobId) {
                       <option v-for="name in storeNames" :key="name" :value="name" />
                     </datalist>
                     <button
-                      class="btn btn-primary save-vendor-btn"
-                      :disabled="savingVendor"
-                      @click="saveEditVendor($event, job.jobId)"
-                    >{{ savingVendor ? '…' : 'Save' }}</button>
+                      class="btn btn-primary save-field-btn"
+                      :disabled="vendorSaving"
+                      @click.stop="saveVendorEdit(job.jobId)"
+                    >{{ vendorSaving ? '…' : 'Save' }}</button>
                     <button
-                      class="btn btn-secondary save-vendor-btn"
-                      :disabled="savingVendor"
-                      @click="cancelEditVendor($event)"
+                      class="btn btn-secondary save-field-btn"
+                      :disabled="vendorSaving"
+                      @click.stop="cancelVendorEdit()"
                     >Cancel</button>
-                    <span v-if="vendorEditError" class="vendor-edit-error">{{ vendorEditError }}</span>
+                    <span v-if="vendorEditError" class="field-edit-error">{{ vendorEditError }}</span>
                   </div>
                 </template>
                 <template v-else>
-                  <span class="vendor-text">{{ job.vendor || '—' }}</span>
-                  <button class="edit-vendor-btn" title="Edit store" @click="startEditVendor($event, job)">&#x270F;</button>
+                  <span>{{ job.vendor || '—' }}</span>
+                  <button class="edit-icon-btn" title="Edit store" @click.stop="startVendorEdit(job.jobId, job)">&#x270F;</button>
                 </template>
               </td>
               <td>{{ job.storeCategory ? job.storeCategory.replace(/_/g, ' ') : '—' }}</td>
               <td class="date-cell">
-                <template v-if="editingDateId === job.jobId">
-                  <div class="date-edit-row" @click.stop>
-                    <input type="date" v-model="editDateVal" class="date-edit-input" />
+                <template v-if="dateEditingId === job.jobId">
+                  <div class="field-edit-row" @click.stop>
+                    <input type="date" v-model="dateEditVal" class="field-edit-input" />
                     <button
-                      class="btn btn-primary save-date-btn"
-                      :disabled="savingDate || !editDateVal"
-                      @click="saveEditDate($event, job.jobId)"
-                    >{{ savingDate ? '…' : 'Save' }}</button>
+                      class="btn btn-primary save-field-btn"
+                      :disabled="dateSaving || !dateEditVal"
+                      @click.stop="saveDateEdit(job.jobId)"
+                    >{{ dateSaving ? '…' : 'Save' }}</button>
                     <button
-                      class="btn btn-secondary save-date-btn"
-                      :disabled="savingDate"
-                      @click="cancelEditDate($event)"
+                      class="btn btn-secondary save-field-btn"
+                      :disabled="dateSaving"
+                      @click.stop="cancelDateEdit()"
                     >Cancel</button>
-                    <span v-if="dateEditError" class="date-edit-error">{{ dateEditError }}</span>
+                    <span v-if="dateEditError" class="field-edit-error">{{ dateEditError }}</span>
                   </div>
                 </template>
                 <template v-else>
-                  <span v-if="!isIsoDate(job.receiptDate)" class="date-flag" title="Date not in standard format">!</span>
+                  <span v-if="!isIsoDate(job.receiptDate)" class="badge-icon date-flag" title="Date not in standard format">!</span>
                   <span class="date-text">{{ job.receiptDate ? formatDate(job.receiptDate) : '—' }}</span>
-                  <button class="edit-date-btn" title="Edit date" @click="startEditDate($event, job)">&#x270F;</button>
+                  <button class="edit-icon-btn" title="Edit date" @click.stop="startDateEdit(job.jobId, job)">&#x270F;</button>
                 </template>
               </td>
               <td class="total-cell">
-                <span v-if="job.priceCheckWarning" class="price-warn" :title="job.priceCheckMessage || 'Item prices do not match total'">!</span>
+                <span v-if="job.priceCheckWarning" class="badge-icon price-warn" :title="job.priceCheckMessage || 'Item prices do not match total'">!</span>
                 {{ job.total || '—' }}
               </td>
               <td class="col-action">
-                <button class="delete-btn" title="Delete receipt" @click="startDelete($event, job.jobId)">&#x1F5D1;</button>
+                <button class="delete-btn" title="Delete receipt" @click.stop="startDelete(job.jobId)">&#x1F5D1;</button>
               </td>
             </tr>
           </template>
@@ -432,8 +359,7 @@ async function saveEditVendor(e, jobId) {
 }
 
 .receipt-row:hover .delete-btn,
-.receipt-row:hover .edit-date-btn,
-.receipt-row:hover .edit-vendor-btn {
+.receipt-row:hover .edit-icon-btn {
   opacity: 1;
 }
 
@@ -453,36 +379,14 @@ async function saveEditVendor(e, jobId) {
   color: var(--danger);
 }
 
-/* Date cell */
-.total-cell { white-space: nowrap; }
-
-.price-warn {
+/* Shared badge (price warning, date flag) */
+.badge-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 1.1rem;
   height: 1.1rem;
   border-radius: 50%;
-  background: var(--danger);
-  color: #fff;
-  font-size: 0.65rem;
-  font-weight: 700;
-  margin-right: 0.3rem;
-  vertical-align: middle;
-  line-height: 1;
-  cursor: default;
-}
-
-.date-cell { white-space: nowrap; }
-
-.date-flag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.1rem;
-  height: 1.1rem;
-  border-radius: 50%;
-  background: #f59e0b;
   color: #fff;
   font-size: 0.65rem;
   font-weight: 700;
@@ -491,7 +395,11 @@ async function saveEditVendor(e, jobId) {
   line-height: 1;
 }
 
-.edit-date-btn {
+.price-warn { background: var(--danger); cursor: default; }
+.date-flag  { background: #f59e0b; }
+
+/* Shared inline-edit pencil button */
+.edit-icon-btn {
   background: none;
   border: none;
   cursor: pointer;
@@ -505,77 +413,38 @@ async function saveEditVendor(e, jobId) {
   margin-left: 0.2rem;
 }
 
-.edit-date-btn:hover { color: var(--accent); }
+.edit-icon-btn:hover { color: var(--accent); }
 
-/* Vendor cell */
+/* Shared inline-edit row layout */
+.field-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.field-edit-input {
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: var(--text-sm);
+  background: var(--surface);
+  min-width: 8rem;
+}
+
+.save-field-btn {
+  font-size: var(--text-xs);
+  padding: 0.25rem 0.6rem;
+  white-space: nowrap;
+}
+
+.field-edit-error {
+  font-size: var(--text-xs);
+  color: var(--danger);
+}
+
 .vendor-cell { white-space: nowrap; }
-
-.edit-vendor-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 0.85rem;
-  padding: 0.15rem 0.25rem;
-  opacity: 0;
-  transition: opacity 0.1s, color 0.1s;
-  color: var(--muted);
-  line-height: 1;
-  vertical-align: middle;
-  margin-left: 0.2rem;
-}
-
-.edit-vendor-btn:hover { color: var(--accent); }
-
-.vendor-edit-row {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.vendor-edit-input {
-  padding: 0.2rem 0.4rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: var(--text-sm);
-  background: var(--surface);
-  min-width: 10rem;
-}
-
-.save-vendor-btn {
-  font-size: var(--text-xs);
-  padding: 0.25rem 0.6rem;
-  white-space: nowrap;
-}
-
-.vendor-edit-error {
-  font-size: var(--text-xs);
-  color: var(--danger);
-}
-
-.date-edit-row {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.date-edit-input {
-  padding: 0.2rem 0.4rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: var(--text-sm);
-  background: var(--surface);
-}
-
-.save-date-btn {
-  font-size: var(--text-xs);
-  padding: 0.25rem 0.6rem;
-  white-space: nowrap;
-}
-
-.date-edit-error {
-  font-size: var(--text-xs);
-  color: var(--danger);
-}
+.date-cell   { white-space: nowrap; }
+.total-cell  { white-space: nowrap; }
 
 /* Confirm row */
 .confirm-row td {
