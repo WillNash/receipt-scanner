@@ -106,7 +106,50 @@ resource "aws_iam_role_policy" "lambda_processor" {
   })
 }
 
-## Role 2 — API Lambda (ap-southeast-2; DynamoDB + presigned URL generation)
+## Role 2 — Stores refresh Lambda (ap-southeast-2; Overpass → DynamoDB stores table)
+
+resource "aws_iam_role" "lambda_stores_refresh" {
+  name = "${var.project_name}-stores-refresh-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = {
+    Project     = var.project_name
+    Environment = var.environment
+  }
+}
+
+resource "aws_iam_role_policy" "lambda_stores_refresh" {
+  name = "${var.project_name}-stores-refresh-policy"
+  role = aws_iam_role.lambda_stores_refresh.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "CloudWatchLogs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "arn:aws:logs:*:${var.aws_account_id}:*"
+      },
+      {
+        Sid      = "StoresWrite"
+        Effect   = "Allow"
+        Action   = "dynamodb:PutItem"
+        Resource = aws_dynamodb_table.stores.arn
+      },
+    ]
+  })
+}
+
+## Role 3 — API Lambda (ap-southeast-2; DynamoDB + presigned URL generation)
 
 resource "aws_iam_role" "lambda_api" {
   name = "${var.project_name}-api-role"

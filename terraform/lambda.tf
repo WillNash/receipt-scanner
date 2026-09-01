@@ -95,6 +95,72 @@ resource "aws_lambda_function" "api_handler" {
   }
 }
 
+## Stores refresh Lambda — weekly Overpass scrape → DynamoDB
+
+data "archive_file" "stores_refresh_zip" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambda/stores_refresh/package"
+  output_path = "${path.module}/../lambda/stores_refresh/stores_refresh.zip"
+}
+
+resource "aws_cloudwatch_log_group" "stores_refresh" {
+  name              = "/aws/lambda/${var.project_name}-stores-refresh"
+  retention_in_days = 14
+
+  tags = {
+    Project     = var.project_name
+    Environment = var.environment
+  }
+}
+
+resource "aws_lambda_function" "stores_refresh" {
+  function_name    = "${var.project_name}-stores-refresh"
+  filename         = data.archive_file.stores_refresh_zip.output_path
+  source_code_hash = data.archive_file.stores_refresh_zip.output_base64sha256
+  role             = aws_iam_role.lambda_stores_refresh.arn
+  handler          = "handler.lambda_handler"
+  runtime          = "python3.12"
+  timeout          = 120
+  memory_size      = 128
+
+  environment {
+    variables = {
+      STORES_TABLE   = aws_dynamodb_table.stores.name
+      PRIMARY_REGION = var.primary_region
+    }
+  }
+
+  tags = {
+    Project     = var.project_name
+    Environment = var.environment
+  }
+}
+
+resource "aws_cloudwatch_event_rule" "stores_refresh_weekly" {
+  name                = "${var.project_name}-stores-refresh-weekly"
+  description         = "Trigger stores refresh every Monday at midnight UTC"
+  schedule_expression = "cron(0 0 ? * MON *)"
+
+  tags = {
+    Project     = var.project_name
+    Environment = var.environment
+  }
+}
+
+resource "aws_cloudwatch_event_target" "stores_refresh" {
+  rule      = aws_cloudwatch_event_rule.stores_refresh_weekly.name
+  target_id = "stores-refresh-lambda"
+  arn       = aws_lambda_function.stores_refresh.arn
+}
+
+resource "aws_lambda_permission" "stores_refresh_eventbridge" {
+  statement_id  = "AllowEventBridgeInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.stores_refresh.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.stores_refresh_weekly.arn
+}
+
 ## Allow API Gateway to invoke the API Lambda
 
 resource "aws_lambda_permission" "api_handler_invoke" {
