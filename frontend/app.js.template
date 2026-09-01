@@ -530,7 +530,7 @@ async function showEditModal(job) {
 
   // Populate store datalist async — non-blocking, degrades gracefully to free-text if it fails
   apiFetch(`${CONFIG.apiBaseUrl}/stores`)
-    .then(r => r.ok ? r.json() : null)
+    .then(r => r.ok ? r.json() : Promise.reject(new Error(`GET /stores: ${r.status}`)))
     .then(data => {
       if (!data || !Array.isArray(data.stores)) return;
       const dl = modal.querySelector("#store-options");
@@ -541,7 +541,7 @@ async function showEditModal(job) {
         dl.appendChild(opt);
       });
     })
-    .catch(() => {});
+    .catch(err => console.warn("Store list unavailable:", err));
 
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
