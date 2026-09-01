@@ -1,245 +1,186 @@
-# Claude Context Explorer — Processor Vendor Fuzzy-Match via Haiku
+# Claude Context Explorer
 
 ## Task
-Add Claude Haiku fuzzy-matching of the OCR vendor name against the DynamoDB stores table in the processor Lambda. Cache the stores list at module level (cold start only). Store a normalised store name alongside the raw OCR vendor. Add IAM permission for the processor to read the stores table.
+Add a store name dropdown to the receipt edit UI. When the edit button on a receipt is clicked, the vendor/store name field should become a `<select>` populated from `DynamoDB receipt-scanner-stores`, rather than a plain text `<input>`. Selecting a value saves it via the existing `PATCH /receipts/{jobId}` endpoint.
 
 ---
 
-## Files Examined
+## 1. frontend/app.js.template — Edit UI
 
-### 1. `/workspace/active_repo/lambda/processor/handler.py`
+**File:** `/workspace/active_repo/frontend/app.js.template`
 
-**Vendor extraction flow (key lines):**
+### How the edit button is wired
+- `buildHistoryCard()` (line 444) appends an Edit button to each COMPLETE history card.
+- Its click handler calls `showEditModal(job)` (line 483).
 
-- Line 261: `extracted, usage = _run_bedrock(tr.text)` — Bedrock returns a dict including `extracted["vendor"]` (raw OCR vendor string).
-- Line 276–287: `ReceiptAnalysis` is constructed; `vendor` field is set to `extracted.get("vendor") or "Unknown vendor"`.
-- Lines 153–168: `update_job(...)` writes the COMPLETE job to DynamoDB. The fields written include `"vendor": dyn_s(result.vendor)`. There is no `normalised_vendor` / `matched_store` field yet — that is what needs adding.
-- Lines 170–181: `write_line_items(...)` is called with `ctx.vendor = result.vendor`. This will also want the normalised value if desired for analytics.
+### showEditModal() — full edit flow (lines 488–640)
+- Creates a modal overlay via DOM manipulation (no innerHTML for user data — XSS safe pattern).
+- The modal shell is set with `modal.innerHTML = ...` for the static structure only.
+- **Vendor field** is currently a plain `<input id="edit-vendor" type="text">` declared inside the `modal.innerHTML` string (line 507).
+- The value is set safely via DOM after injection: `modal.querySelector("#edit-vendor").value = job.vendor || ""` (line 527).
+- Other editable fields: `receiptDate` (text input `#edit-date`), and line items rendered by `renderItems()` (description, quantity, package_size, unit_price, price, discount).
 
-**ReceiptAnalysis dataclass (lines 38–48):** Fields are `store_category`, `vendor`, `receipt_date`, `total`, `items`, `price_check_warning`, `price_check_message`, `debug_s3_key`, `textract_debug_s3_key`, `cropped_s3_key`. A new optional field (`matched_store: str | None = None`) should be added here.
-
-**Environment variables already read (lines 51–55):**
+### How PATCH is called (lines 619–638)
+```js
+const vendor = modal.querySelector("#edit-vendor").value.trim();
+const receiptDate = modal.querySelector("#edit-date").value.trim();
+const resp = await apiFetch(`${CONFIG.apiBaseUrl}/receipts/${job.jobId}`, {
+  method: "PATCH",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ vendor, receiptDate, items: editItems }),
+});
 ```
-DYNAMODB_TABLE        = os.environ["DYNAMODB_TABLE"]
-LINE_ITEMS_TABLE      = os.environ.get("LINE_ITEMS_TABLE", "")
-IMAGE_HASHES_TABLE    = os.environ.get("IMAGE_HASHES_TABLE", "")
-S3_BUCKET             = os.environ["S3_UPLOADS_BUCKET"]
-PRIMARY_REGION        = os.environ.get("PRIMARY_REGION", "ap-southeast-2")
-```
-A new `STORES_TABLE = os.environ.get("STORES_TABLE", "")` env var must be added here and used by the stores-cache loader.
+The vendor value is read from `#edit-vendor` using `.value`. Replacing the `<input>` with a `<select>` requires no change to the PATCH call — `select.value` returns the selected option's value identically.
 
-**Module-level AWS clients (lines 57–60):** `s3`, `dynamodb`, `bedrock`, `textract` are all created at module level — the stores cache scan should reuse the existing `dynamodb` client.
+### How stores data is currently fetched/displayed
+- There is **no existing GET /stores call** anywhere in app.js.template.
+- Stores appear on receipt cards only as `job.storeCategory` (a badge, line 396) and `job.vendor` (the receipt header, line 405). These come from the scanned job record, not from a frontend fetch of the stores table.
+- Existing API calls from the frontend: `POST /upload-url`, `GET /jobs/{jobId}`, `GET /receipts`, `PATCH /receipts/{jobId}`.
 
-**Client injection pattern (lines 63–66):**
+---
+
+## 2. lambda/api/handler.py — Routing and Edit Logic
+
+**File:** `/workspace/active_repo/lambda/api/handler.py`
+
+### _route() routing table (lines 149–164)
 ```python
-import textract_pipeline as _tp
-import bedrock_extraction as _be
-_tp.set_textract_client(textract)
-_be.set_bedrock_client(bedrock)
+def _route(method, path, user_id, user_email, event):
+    job_id = (event.get("pathParameters") or {}).get("jobId")
+    body = json.loads(event.get("body") or "{}") if method in ("POST", "PATCH") else {}
+
+    if method == "POST"   and path.endswith("/upload-url"):   -> handle_upload_url
+    if method == "GET"    and path.endswith("/receipts"):      -> handle_list_receipts
+    if method == "GET"    and "/jobs/" in path:                -> handle_get_job
+    if method == "DELETE" and "/receipts/" in path:            -> handle_delete_receipt
+    if method == "PATCH"  and "/receipts/" in path:            -> handle_edit_receipt
+    return make_response(404, {"error": "Not found"})
 ```
-If the fuzzy-match logic is placed in `bedrock_extraction.py`, a `set_dynamodb_client(dynamodb)` injector should be added there too following the same pattern. Alternatively, the stores scan and cache can live entirely in `handler.py` and a list of name strings passed into `bedrock_extraction._match_store()`.
-
----
-
-### 2. `/workspace/active_repo/lambda/processor/bedrock_extraction.py`
-
-**Bedrock client:** `bedrock = None` at module level (line 144); injected via `set_bedrock_client(client)` (lines 147–149).
-
-**Model ID (lines 12–14):**
+A new `GET /stores` handler needs a new branch before the final 404 return:
 ```python
-BEDROCK_MODEL_ID = os.environ.get(
-    "BEDROCK_MODEL_ID", "anthropic.claude-3-5-haiku-20241022-v1:0"
-)
+if method == "GET" and path.endswith("/stores"):
+    return handle_list_stores()
 ```
-This is the same model to use for the fuzzy-match call. The actual deployed value from `variables.tf` is `"au.anthropic.claude-haiku-4-5-20251001-v1:0"`.
 
-**`_run_bedrock(receipt_text)` call pattern (lines 153–236):** Uses `bedrock.converse(modelId=BEDROCK_MODEL_ID, messages=[...], toolConfig={...})`. For the fuzzy-match call a simpler `converse` call can be used — either with a minimal single-field tool (e.g. `match_store` returning `{"matched_store": "..."}`) or a plain text message asking for a match with JSON in the reply. The existing tool-use pattern with `toolChoice: {"tool": {"name": "..."}}` is the most reliable way to force structured output.
+### handle_list_receipts pattern (lines 276–313)
+- Queries the jobs GSI with `dynamodb.query()`, paginates, returns `{"receipts": [...], "lastKey": ...}`.
+- The `GET /stores` handler can be simpler: a full `dynamodb.scan()` of the stores table, projecting only the `name` attribute, deduplicating and sorting, returning `{"stores": [...sorted name strings...]}`.
 
-Response parsing (lines 225–229): iterates `response["output"]["message"]["content"]` looking for a `toolUse` block with the expected tool name. Token usage is logged via `response.get("usage", {})`.
+### handle_edit_receipt (lines 451–494)
+- Calls `_validate_edit_body(body)`, fetches the job item, builds an `updates` dict, calls `update_job()`.
+- Accepted body fields: `vendor` (string), `receiptDate` (string), `items` (list).
+- Vendor update: `updates["vendor"] = dyn_s(str(body["vendor"]))` (line 462).
+- **No change needed here** — the vendor value from a `<select>` is still a plain string.
 
-**`_validate_classification(extracted)` (lines 239–248):** Shows the pattern for in-place mutation of the `extracted` dict — the normalised vendor result can similarly be merged back into `extracted` before `ReceiptAnalysis` is constructed.
+### _validate_edit_body (lines 416–448)
+- `vendor`: must be `str`, max 200 chars. Store names from the Overpass scrape are well under this limit.
+- `receiptDate`: must match `\d{4}-\d{2}-\d{2}`.
+- `items`: list, max 200 entries with per-field validation.
+- No `storeCategory` field is accepted. The dropdown should only set `vendor`, not `storeCategory`.
+
+### Environment variables for the API Lambda (from terraform/lambda.tf lines 78–96)
+```
+DYNAMODB_TABLE, LINE_ITEMS_TABLE, IMAGE_HASHES_TABLE,
+UPLOADS_BUCKET, COGNITO_USER_POOL_ID, COGNITO_APP_CLIENT_ID,
+PRIMARY_REGION, ALLOWED_ORIGIN, DAILY_UPLOAD_LIMIT, GLOBAL_UPLOAD_LIMIT
+```
+**`STORES_TABLE` is NOT in the API Lambda's environment.** It is passed only to the Processor and Stores Refresh Lambdas. It must be added to the API Lambda block in `terraform/lambda.tf`.
 
 ---
 
-### 3. `/workspace/active_repo/lambda/api/handler.py` — JWKS cache pattern to replicate
+## 3. terraform/api_gateway.tf — Route Registration Pattern
 
-**`_JwksCache` class (lines 111–139):** Thread-safe double-checked locking:
-```python
-_JWKS_TTL_SECONDS = 3600
+**File:** `/workspace/active_repo/terraform/api_gateway.tf`
 
-class _JwksCache:
-    def __init__(self):
-        self._data: dict | None = None
-        self._fetched_at: datetime | None = None
-        self._lock = threading.Lock()
+### Pattern for a new GET /stores route
+Every REST API route needs these 7 resources (using `/receipts` as the reference):
 
-    def get(self) -> dict:
-        now = datetime.now(timezone.utc)
-        # Fast path — no lock needed when cache is fresh.
-        if (self._data is not None and self._fetched_at is not None
-                and (now - self._fetched_at).total_seconds() <= _JWKS_TTL_SECONDS):
-            return self._data
-        with self._lock:
-            now = datetime.now(timezone.utc)
-            if self._data is None or (...TTL expired...):
-                # fetch and populate self._data
-                ...
-            return self._data
+1. `aws_api_gateway_resource` — `path_part = "stores"`, `parent_id = root_resource_id`.
+2. `aws_api_gateway_method` (GET) — `authorization = "COGNITO_USER_POOLS"`, `authorizer_id = aws_api_gateway_authorizer.cognito.id`.
+3. `aws_api_gateway_integration` (GET) — `type = "AWS_PROXY"`, `integration_http_method = "POST"`, `uri = aws_lambda_function.api_handler.invoke_arn`.
+4. `aws_api_gateway_method` (OPTIONS) — `authorization = "NONE"`.
+5. `aws_api_gateway_integration` (OPTIONS) — `type = "MOCK"`, `request_templates = { "application/json" = "{\"statusCode\": 200}" }`.
+6. `aws_api_gateway_method_response` (OPTIONS 200) — declares the three CORS response header parameter keys.
+7. `aws_api_gateway_integration_response` (OPTIONS) — sets CORS header values (origin `'*'`, methods `'GET,OPTIONS'`).
 
-_jwks_cache = _JwksCache()
-```
-
-**For the stores cache the pattern is simpler** — the stores list is loaded once at cold start (no TTL needed, since the stores table is only updated weekly by the stores_refresh Lambda). A module-level sentinel `_STORES_CACHE: list | None = None` populated on first call is sufficient. Because the processor Lambda has `batch_size=1` (one SQS message per execution environment at a time), there is no within-process concurrency, so no lock is strictly required. However, mirroring the locking pattern from `_JwksCache` is safe and idiomatic.
+The `aws_api_gateway_deployment.main` `triggers` block (lines 335–352) and `depends_on` list (lines 359–369) **must both be updated** to include the new resource, method, and integration — otherwise Terraform will not force a redeployment when the route is added.
 
 ---
 
-### 4. `/workspace/active_repo/lambda/shared/`
+## 4. terraform/iam.tf — API Lambda Role Policy
 
-- **`dynamo.py`** — helpers: `now_iso()`, `dyn_s()`, `dyn_n()`, `dyn_bool()`, `get_job()`, `update_job()`. No scan helper exists — a raw `dynamodb.scan(TableName=STORES_TABLE)` in the handler with `LastEvaluatedKey` pagination is required.
-- **`constants.py`** — only `VALID_ITEM_CATEGORIES`. No store-related constants.
-- **`line_items.py`** — `LineItemContext` dataclass and `write_line_items()`. `vendor` is a plain string field. A `matched_store` field could optionally be added to `LineItemContext` if line-item analytics should carry the normalised name, but this is out of scope for the current task.
-- **`pricing.py`** — not relevant to this task.
+**File:** `/workspace/active_repo/terraform/iam.tf`
 
----
+### API Lambda role (`lambda_api`) — lines 160–247
+The `DynamoDBReadWrite` Sid (lines 192–199) covers only the jobs table and its index. Other statements cover `image_hashes`, `line_items`, and S3.
 
-### 5. `/workspace/active_repo/terraform/iam.tf`
+**The stores table is entirely absent from the API Lambda's policy.**
 
-**Processor role policy (`aws_iam_role_policy.lambda_processor`, lines 24–107):**
-
-Current DynamoDB statements:
-```hcl
-{
-  Sid    = "DynamoDBWrite"
-  Effect = "Allow"
-  Action = ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem"]
-  Resource = aws_dynamodb_table.jobs.arn
-},
-{
-  Sid    = "LineItemsWrite"
-  Effect = "Allow"
-  Action = ["dynamodb:PutItem", "dynamodb:BatchWriteItem"]
-  Resource = aws_dynamodb_table.line_items.arn
-},
-{
-  Sid    = "ImageHashesReadWrite"
-  Effect = "Allow"
-  Action = ["dynamodb:GetItem", "dynamodb:PutItem"]
-  Resource = aws_dynamodb_table.image_hashes.arn
-},
-```
-
-**Missing:** No statement grants the processor access to `aws_dynamodb_table.stores`. A new statement must be appended inside the same `Statement = [...]` array:
+A new statement must be added to `aws_iam_role_policy.lambda_api`:
 ```hcl
 {
   Sid    = "StoresRead"
   Effect = "Allow"
   Action = ["dynamodb:Scan"]
   Resource = aws_dynamodb_table.stores.arn
-},
+}
 ```
-
-The `BedrockInvokeModel` statement (lines 73–79) already covers the Haiku model via wildcard foundation-model and inference-profile ARNs — no change needed there.
+The processor role already has an identical `StoresRead` statement (iam.tf lines 106–110) as a reference.
 
 ---
 
-### 6. `/workspace/active_repo/terraform/variables.tf`
+## 5. DynamoDB Stores Table Schema
 
-**`bedrock_model_id` (lines 46–49):**
-```hcl
-variable "bedrock_model_id" {
-  type    = string
-  default = "au.anthropic.claude-haiku-4-5-20251001-v1:0"
-}
-```
-Already the Haiku model. Already injected into the processor Lambda as `BEDROCK_MODEL_ID` (see `lambda.tf` line 45). No variable change needed.
+**File:** `/workspace/active_repo/terraform/dynamodb.tf` (lines 69–88)
+- Table name: `${var.project_name}-stores` — deployed as `bedrock-image-ai-stores` with the default `project_name`, or `receipt-scanner-stores` if `project_name` is overridden in tfvars.
+- Hash key: `store_id` (String). No range key, no GSI.
+- TTL attribute: `expires_at`.
 
----
+**Attributes written by the stores_refresh lambda** (`/workspace/active_repo/lambda/stores_refresh/handler.py` lines 57–64):
+- `store_id`: `"{type}/{id}"` e.g. `"node/12345678"`
+- `osm_type`: `"node"` or `"way"`
+- `name`: the shop name string (e.g. `"Countdown"`) — this is the value to populate the dropdown
+- `shop_type`: OSM `shop` tag (e.g. `"supermarket"`)
+- `lat`, `lon`: coordinate strings
 
-### 7. `/workspace/active_repo/terraform/lambda.tf` — processor env vars
-
-**Processor Lambda environment block (lines 39–47):**
-```hcl
-environment {
-  variables = {
-    DYNAMODB_TABLE     = aws_dynamodb_table.jobs.name
-    LINE_ITEMS_TABLE   = aws_dynamodb_table.line_items.name
-    IMAGE_HASHES_TABLE = aws_dynamodb_table.image_hashes.name
-    S3_UPLOADS_BUCKET  = aws_s3_bucket.uploads.bucket
-    PRIMARY_REGION     = var.primary_region
-    BEDROCK_MODEL_ID   = var.bedrock_model_id
-  }
-}
-```
-`STORES_TABLE` is absent and must be added: `STORES_TABLE = aws_dynamodb_table.stores.name`.
-
----
-
-### 8. `/workspace/active_repo/terraform/dynamodb.tf` — stores table schema
-
-**`aws_dynamodb_table.stores` (lines 69–88):**
-- Name: `${var.project_name}-stores` (deployed as `receipt-scanner-stores`)
-- Hash key: `store_id` (String), e.g. `"node/12345678"` (OSM type/id from stores_refresh)
-- TTL attribute: `expires_at`
-- No range key, no GSI
-
-**Item attributes written by stores_refresh Lambda** (`/workspace/active_repo/lambda/stores_refresh/handler.py` lines 57–64):
-```python
-{
-  "store_id":  {"S": f"{el['type']}/{el['id']}"},
-  "osm_type":  {"S": el["type"]},
-  "name":      {"S": tags.get("name", "")},   # <-- the store name to match against
-  "shop_type": {"S": tags.get("shop", "")},
-  "lat":       {"S": lat},
-  "lon":       {"S": lon},
-}
-```
-The `name` attribute is the canonical store name to fuzzy-match against. The Haiku prompt should receive a list of `name` strings from a full table scan.
+**What the processor currently reads from the stores table:** Only the `name` attribute is projected (via `_get_store_names()` in processor handler.py lines 81–95). The new `GET /stores` API handler should use the same projection.
 
 ---
 
 ## Summary of All Required Changes
 
-### `lambda/processor/handler.py`
-1. Add `STORES_TABLE = os.environ.get("STORES_TABLE", "")` alongside existing env var reads.
-2. Add module-level stores cache: `_STORES_CACHE: list | None = None` (list of store name strings).
-3. Add a `_load_stores() -> list` function that scans `STORES_TABLE` with `LastEvaluatedKey` pagination, extracts the `name` attribute from each item (skipping empty names), populates and returns `_STORES_CACHE`. Returns `[]` if `STORES_TABLE` is unset.
-4. Add `matched_store: str | None = None` as an optional field in `ReceiptAnalysis`.
-5. In `analyze_receipt()`, after `_run_bedrock()` returns: call `_match_store_name(extracted.get("vendor", ""), _load_stores())` (or equivalent from `bedrock_extraction`). Assign the result to `result.matched_store`.
-6. In `update_job(...)` call, conditionally add `"matched_store": dyn_s(result.matched_store)` if the value is truthy.
+### terraform/lambda.tf
+- Add `STORES_TABLE = aws_dynamodb_table.stores.name` to the `aws_lambda_function.api_handler` `environment.variables` block (lines 78–96).
 
-### `lambda/processor/bedrock_extraction.py`
-1. Add a new exported function `_match_store(vendor: str, store_names: list[str]) -> str | None`.
-2. If `store_names` is empty or `vendor` is empty, return `None` immediately (no Bedrock call).
-3. Use `bedrock.converse(modelId=BEDROCK_MODEL_ID, ...)` with a concise prompt listing the candidate store names and asking for the single best match or explicit "no match". A minimal `toolSpec` forcing a JSON response like `{"matched": "Countdown", "confident": true}` or `{"matched": null, "confident": false}` is the most reliable approach.
-4. Return the matched name if `confident` is true, else `None`.
+### terraform/iam.tf
+- Add a `StoresRead` statement to `aws_iam_role_policy.lambda_api` granting `dynamodb:Scan` on `aws_dynamodb_table.stores.arn`.
 
-### `terraform/iam.tf`
-- Add a `StoresRead` statement to `aws_iam_role_policy.lambda_processor`:
-  ```hcl
-  {
-    Sid    = "StoresRead"
-    Effect = "Allow"
-    Action = ["dynamodb:Scan"]
-    Resource = aws_dynamodb_table.stores.arn
-  },
-  ```
+### terraform/api_gateway.tf
+- Add 7 new resources for the `/stores` route following the `/receipts` pattern (resource, GET method, GET integration, OPTIONS method, OPTIONS integration, OPTIONS method_response, OPTIONS integration_response).
+- Add the new resource/method/integration IDs to the `aws_api_gateway_deployment.main` `triggers` block and `depends_on` list.
 
-### `terraform/lambda.tf`
-- Add `STORES_TABLE = aws_dynamodb_table.stores.name` to the processor Lambda's `environment.variables` block.
+### lambda/api/handler.py
+- Add `STORES_TABLE = os.environ.get("STORES_TABLE", "")` near the other env var reads at the top (around line 21).
+- Add a `handle_list_stores()` function: paginated `dynamodb.scan()` of `STORES_TABLE` projecting only `#n` (`name`), deduplicate, sort, return `make_response(200, {"stores": sorted_names})`. Return `make_response(200, {"stores": []})` if `STORES_TABLE` is unset.
+- Add a routing branch in `_route()`: `if method == "GET" and path.endswith("/stores"): return handle_list_stores()`.
 
-### `lambda/api/handler.py` (optional, if frontend needs the field)
-- Add `matched_store: str | None` to `JobRecord` dataclass and `from_dynamo()`.
-- Add `"matchedStore": job.matched_store` to the `format_receipt()` return dict.
+### frontend/app.js.template
+- In `showEditModal()`, replace the `<input id="edit-vendor" type="text">` in the `modal.innerHTML` string with a `<select id="edit-vendor">` element (or build it via DOM).
+- After the modal is mounted, call `apiFetch(`${CONFIG.apiBaseUrl}/stores`)` to load store names. Populate the `<select>` with one `<option>` per name, plus an initial blank/placeholder option.
+- Set the selected option to `job.vendor` if it matches one of the store names; otherwise add a free-text option for the current vendor or fall back gracefully.
+- The existing PATCH save code (`modal.querySelector("#edit-vendor").value.trim()`) works unchanged — `select.value` returns the selected option's value identically to `input.value`.
+- Show a loading/disabled state while the stores fetch is in-flight; handle fetch errors gracefully (e.g. fall back to a plain text input or show an error message).
 
 ---
 
-## Potential Side-Effects and Watch-outs
+## Key Side-Effects and Watch-outs
 
-- **Bedrock latency:** A second `bedrock.converse()` call adds latency to every processor invocation (typically 300–800 ms for Haiku). The stores scan is cached at cold start only, so DynamoDB is only hit once per execution environment lifetime.
-- **Empty stores table:** The stores table may be empty before the first stores_refresh run. `_match_store` must short-circuit and return `None` without calling Bedrock when the store list is empty.
-- **DynamoDB scan pagination:** The scan must follow `LastEvaluatedKey` until exhausted. The Overpass query in stores_refresh covers a 10 km radius and returns at most a few hundred results — well within a single scan for a PAY_PER_REQUEST table.
-- **Names with empty string:** The stores_refresh Lambda uses `tags.get("name", "")`, so items with no OSM name tag will have `name = ""`. The cache loader should skip empty-string names to avoid polluting the candidate list.
-- **`matched_store` in DynamoDB jobs table:** If the API Lambda's `format_receipt()` and `JobRecord` are not updated, the field will be silently stored in DynamoDB but never returned to the frontend. Decide whether frontend exposure is in scope.
-- **`project_name` vs `"receipt-scanner"`:** The actual deployed stores table name is `receipt-scanner-stores` (set in `terraform.tfvars`), not `bedrock-image-ai-stores` (the `variables.tf` default). Always use `aws_dynamodb_table.stores.name` in Terraform and the `STORES_TABLE` env var in Python — never hardcode the table name in Lambda code.
-- **Processor zip size:** No new third-party libraries are needed (Bedrock SDK already bundled). No impact on zip size or the S3-upload deployment path.
-- **Thread safety:** The processor's SQS event source has `batch_size=1`, so each execution environment handles one message at a time. A `None`-sentinel module-level cache without a lock is safe, but adding a `threading.Lock()` (as in `_JwksCache`) is fine for consistency.
+- **STORES_TABLE env var gap:** The API Lambda currently has no `STORES_TABLE` env var. If the handler code references it before the Terraform change is deployed, `os.environ.get("STORES_TABLE", "")` will return `""` and `handle_list_stores()` must handle this gracefully (return empty list, not crash).
+- **Table name ambiguity:** `project_name` defaults to `"bedrock-image-ai"` in `variables.tf`, so the stores table is `bedrock-image-ai-stores` in the default deployment, not `receipt-scanner-stores`. Always use `aws_dynamodb_table.stores.name` in Terraform and the `STORES_TABLE` env var in Python — never hardcode.
+- **Duplicate names:** The Overpass scrape can produce multiple records with the same shop name (e.g. multiple Countdown branches). The handler must deduplicate the name list before returning it.
+- **Empty name values:** `stores_refresh` uses `tags.get("name", "")` — items with no OSM name tag get `name = ""`. Skip empty strings in the scan result.
+- **Dropdown UX when vendor is not in the list:** If `job.vendor` was set by OCR and does not exactly match any store name, the dropdown will not pre-select it. Consider adding a free-text option showing the current vendor, or a "Custom..." option that reveals a text input. At minimum, add the current vendor as an option so Save does not silently blank it.
+- **Store list size:** The Overpass query covers a 10 km radius — expect tens to low hundreds of results, deduplicated. This is small enough for a simple `<select>` without search/filter, but good to confirm after first data load.
+- **Scan cost:** A full table scan runs on every `GET /stores` call. With PAY_PER_REQUEST billing and a small table this is negligible, but consider caching at the module level in the API Lambda (similar to the JWKS cache) to avoid repeated scans on warm invocations.
+- **CORS on /stores OPTIONS:** The OPTIONS integration_response for `/stores` must include `'GET,OPTIONS'` in `Access-Control-Allow-Methods` so the browser preflight succeeds.
+- **Deployment trigger:** The `aws_api_gateway_deployment.main` `triggers` block uses a `sha1(jsonencode([...ids...]))`. Forgetting to add the new route's IDs there means the stage will not be redeployed after `terraform apply`, and the new route will return 404 in production even though it was created.

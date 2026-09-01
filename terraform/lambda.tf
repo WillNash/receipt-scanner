@@ -80,6 +80,7 @@ resource "aws_lambda_function" "api_handler" {
       DYNAMODB_TABLE       = aws_dynamodb_table.jobs.name
       LINE_ITEMS_TABLE     = aws_dynamodb_table.line_items.name
       IMAGE_HASHES_TABLE   = aws_dynamodb_table.image_hashes.name
+      STORES_TABLE         = aws_dynamodb_table.stores.name
       UPLOADS_BUCKET       = aws_s3_bucket.uploads.bucket
       COGNITO_USER_POOL_ID  = aws_cognito_user_pool.main.id
       COGNITO_APP_CLIENT_ID = aws_cognito_user_pool_client.main.id

@@ -1,121 +1,67 @@
 # Plan Review
 
 ## Verdict
-**NEEDS REVISION** — the plan has one unresolved contradiction between its own guidance and the researcher's API findings, plus two minor but consequential gaps in step specification. All structural assumptions (file locations, resource names, line references, dataclass shapes) are accurate and confirmed against the actual source code.
+**NEEDS REVISION** — the plan contains five concrete flaws that, if implemented as written, will produce incorrect infrastructure (mismatched CORS header values), a misleading implementation model for the cache function, an XSS surface in the datalist population, and two gaps that will confuse the implementer. None of the flaws are architectural; all are correctable with targeted edits before implementation begins.
 
 ---
 
 ## Flaws Found
 
-- **Flaw 1 — Tool schema type: plan and researcher directly contradict each other:**
-  The plan (Step 1, and the Risks & Blockers section) explicitly forbids `"type": ["string", "null"]` in the Bedrock tool spec, stating the Converse API "may raise a `ValidationException` for non-scalar type values." It instructs using `"type": "string"` only and encoding the no-match case as the sentinel string `"null"`.
+- **Flaw 1 — CORS `Access-Control-Allow-Methods` stated as matching the existing codebase but it does not:** Step 3, item 7 specifies `Access-Control-Allow-Methods = "'GET,OPTIONS'"` and simultaneously claims this value "must match exactly the value used in every other OPTIONS integration response in the file (lines 84, 156, 222, 305)." Reading the actual `api_gateway.tf`, lines 84–88 (`upload_url_options`), 155–159 (`job_id_options`), and 220–225 (`receipts_options`) all use `'GET,POST,OPTIONS'`. Line 304–308 (`receipt_id_options`) uses `'DELETE,PATCH,OPTIONS'`. No existing route uses `'GET,OPTIONS'`. The plan's own cross-reference claim is false. The instruction to match the existing value and the value shown (`'GET,OPTIONS'`) are contradictory. If an implementer matches the existing pattern, they will write `'GET,POST,OPTIONS'` (incorrect for a GET-only route). If they use what the plan shows, they will contradict the plan's own rationale. The plan must resolve this contradiction by stating that `'GET,OPTIONS'` is the deliberately correct value for a GET-only route and explicitly acknowledging that existing routes over-declare methods (which is their own inconsistency, not a model to copy).
 
-  The researcher document (section 2, Tool schema block) does the opposite: it specifies `"matched_name": { "type": ["string", "null"] }` as the recommended schema, with no qualification or warning about ValidationException.
+- **Flaw 2 — Processor `_get_store_names()` is a false model for sorting and deduplication:** Step 6 says to "Model the scan loop on the processor's `_get_store_names()` (processor/handler.py lines 74–96)." Reading the actual function (confirmed lines 74–96 of `lambda/processor/handler.py`): it appends names to a plain list and assigns that list directly to `_STORES_CACHE` at line 95 — no deduplication, no sorting. The plan then correctly adds `sorted(set(...))` as a "critical addition." But calling the processor function a model while simultaneously saying its most relevant output line must not be followed creates a false reference. An implementer who copies the function verbatim will produce an unsorted, non-deduplicated list. The description must clearly separate what to copy (the scan loop and pagination mechanics, `ProjectionExpression`, `ExpressionAttributeNames`) from what must not be copied (the cache-assignment line `_STORES_CACHE = names`).
 
-  These two sources are in direct conflict. The plan's actual code sample (Step 1 prose) commits to the scalar string approach, while the researcher's schema commits to the array-union approach. Because the implementer is given both documents, this unresolved contradiction will force a runtime gamble. The existing `RECEIPT_TOOL` in `bedrock_extraction.py` (confirmed by reading the source) uses only scalar `"type"` values throughout — every property uses `"type": "string"` or `"type": "integer"`, never an array. Following codebase consistency strongly favours the scalar approach.
+- **Flaw 3 — XSS surface in datalist population via `innerHTML` in Step 9:** Step 9 in the plan uses DOM methods (`document.createElement("option")` + `opt.value = n`) and explicitly prohibits `innerHTML` with template literals. This is the correct approach. However, the Risks section of the plan simultaneously says "Store names originate from OpenStreetMap via the Overpass scrape and can contain characters such as `"`, `<`, `>`, and `&`" and correctly identifies the XSS risk. Reading the `stores_refresh` Lambda (`lambda/stores_refresh/handler.py` lines 57–64 per the explorer): it writes raw `tags.get("name", "")` values to DynamoDB with no HTML encoding. The plan's Step 9 code block is actually correct (it uses DOM methods). The flaw is that the researcher's reference example (claude-context-researcher.md, section 2, lines 40–42) shows `dl.innerHTML = names.map(n => \`<option value="${n}"></option>\`).join("")` — the XSS-unsafe pattern — as the primary code sample. If the implementer references the researcher document alongside the plan, they may follow the researcher's `innerHTML` example instead of the plan's DOM-method example. The plan must explicitly call out that the researcher's sample is unsafe and must not be followed.
 
-  **Consequence if left unfixed:** If the implementer follows the researcher's schema and the Bedrock AU cross-region inference profile rejects array-type `"type"` values, every `_match_store()` call will raise a `ClientError`. Even though the call is wrapped in a try/except (as Step 5 correctly specifies), every receipt processed while this misconfiguration exists will log a `STORE_MATCH_ERROR` and store no matched_store — the feature is silently broken until the schema is fixed and the Lambda redeployed. Alternatively, if the implementer follows the plan's sentinel-string approach and `["string", "null"]` would have worked, unnecessary complexity is introduced (the sentinel mapping) and the model could theoretically return the string `"null"` for a store actually named "null".
+- **Flaw 4 — Plan does not address the unmatched vendor UX gap identified by the explorer:** The explorer (claude-context-explorer.md, lines 182–183) explicitly flags: "If `job.vendor` was set by OCR and does not exactly match any store name, the dropdown will not pre-select it ... At minimum, add the current vendor as an option so Save does not silently blank it." The plan's Step 9 populates the datalist from `data.stores` but does not address this at all. Because the implementation uses `<input type="text">` + `<datalist>` (not a `<select>`), free-text entry is always permitted and the OCR vendor value set at line 527 is retained — so there is no silent-blanking risk in practice. But the plan makes no mention of this, leaving the implementer with no justification if this is challenged during review. The plan must state explicitly that `<input>` + `<datalist>` is not value-enforcing (unlike `<select>`), so the current vendor value is retained even when absent from the datalist options, and therefore no special unmatched-vendor handling is needed.
 
-- **Flaw 2 — `_get_store_names()` cache-assignment behaviour for the empty-STORES_TABLE guard is underspecified:**
-  Step 3 says: "Returns `[]` if `STORES_TABLE` is empty (guards against missing env var)." It does not specify whether to assign `_STORES_CACHE = []` before returning or to return `[]` without touching the cache sentinel. This matters: if the early-return assigns `_STORES_CACHE = []`, then a subsequent redeployment that corrects the missing `STORES_TABLE` env var will never trigger a real scan within that execution environment's lifetime — the cache is permanently poisoned as an empty list until the environment is recycled. Conversely, if the early-return leaves `_STORES_CACHE = None`, the guard check runs on every invocation when `STORES_TABLE` is unset, which is a harmless no-op but leaves the sentinel in an unexpected state that a future reader of the code may find confusing.
-
-  **Consequence if left unfixed:** Low correctness risk under normal operations (env var will be set in production), but in a misconfigured deployment the cache could be permanently stale for the lifetime of any execution environment that ran before the env var was corrected, without any log warning.
-
-- **Flaw 3 — Step 6's `matched_store` insertion point into the `update_job(...)` dict is underspecified:**
-  Step 6 says to add the conditional spread "alongside the existing one for `cropped_s3_key`" at "lines 153-168." The actual file confirms the `cropped_s3_key` spread is on line 164. The plan's code sample shows the new spread inserted, but does not show its exact position relative to `"image_hash"` and `"updated_at"`. In a Python dict literal, trailing commas on preceding lines must be present; the instruction "alongside" is ambiguous about whether the new line goes before or after line 164's `cropped_s3_key` spread. While Python dict ordering is semantically irrelevant here, an implementer inserting after line 164 without ensuring the trailing comma is present (it is, in the actual code) could create a syntax error. The plan should show the exact two-line context for the insertion.
-
-  **Consequence if left unfixed:** Low risk (syntax errors fail immediately at import time), but the vagueness creates unnecessary ambiguity.
+- **Flaw 5 — Testing Step 1 is mislabelled as a unit-level test:** The testing strategy (point 1) describes creating a Lambda test event with a real JWT and invoking the function directly, then calls this a "Lambda console integration test." This label is correct and the plan is self-consistent here. However, the plan states the test "requires a live Lambda with `STORES_TABLE` set and DynamoDB accessible." What is missing from the testing strategy is any test for the `STORES_TABLE = ""` guard — the partial-deploy scenario that Step 5 specifically protects against with `os.environ.get("STORES_TABLE", "")`. There is no test that confirms `handle_list_stores()` returns `{"stores": []}` (not a 500 or `KeyError`) when `STORES_TABLE` is unset. Given the Risks section calls this scenario out explicitly, the absence of a corresponding test for it is a test gap.
 
 ---
 
 ## Suggested Improvements
 
-- **Improvement 1 — Commit explicitly to the scalar-type approach and explain why:**
-  Remove the "may raise" hedge from the Risks section and replace it with a definitive statement: "The `MATCH_STORE_TOOL` must use `"type": "string"` for `matched_name`, consistent with all other tool property declarations in `bedrock_extraction.py`. The researcher's example schema using `["string", "null"]` is JSON Schema-valid but has not been validated against the AU cross-region inference profile and conflicts with the established codebase pattern. The no-match case is handled by the `"null"` sentinel string." This closes the contradiction.
+- **Improvement 1 — Resolve the `Access-Control-Allow-Methods` contradiction in Step 3 item 7:** Replace the claim that the value must match existing routes with an explicit statement that `'GET,OPTIONS'` is the correct minimal value for a GET-only route, and acknowledge that existing routes over-declare methods. Remove the instruction to match existing values for this particular header.
 
-- **Improvement 2 — Specify the cache-miss-on-empty-table behaviour explicitly in Step 3:**
-  Add one sentence: "If `STORES_TABLE` is empty, return `[]` immediately **without assigning `_STORES_CACHE`**, so that a redeployment adding the env var will trigger a fresh scan on the next cold start rather than reading a stale empty-list cache."
+- **Improvement 2 — Qualify the processor function as a model in Step 6:** Change the model reference so it names specifically which parts to copy (scan loop, pagination via `ExclusiveStartKey`, `ProjectionExpression = "#n"`, `ExpressionAttributeNames = {"#n": "name"}`, empty-string filtering) and explicitly states that the cache-assignment line `_STORES_CACHE = names` must not be copied — it must be replaced with `_STORES_CACHE = sorted(set(names))`.
 
-- **Improvement 3 — Show the exact insertion context for the `update_job` dict in Step 6:**
-  Replace "alongside the existing one for `cropped_s3_key`" with an explicit before/after, showing the new line inserted directly after the `cropped_s3_key` conditional spread (line 164) and before `"image_hash": dyn_s(image_hash)` (line 165):
-  ```python
-  **( {"cropped_s3_key": dyn_s(result.cropped_s3_key)} if result.cropped_s3_key else {} ),
-  **( {"matched_store": dyn_s(result.matched_store)} if result.matched_store else {} ),
-  "image_hash": dyn_s(image_hash),
-  ```
+- **Improvement 3 — Warn against the researcher's `innerHTML` sample in Step 9:** Add a note in Step 9 that the researcher's reference code (section 2 of claude-context-researcher.md) uses `dl.innerHTML` with template-literal interpolation of OSM name strings, which is the unsafe pattern. The plan's DOM-method implementation is the required approach; the researcher's sample must not be substituted.
 
-- **Improvement 4 — Confirm the IAM `bedrock:InvokeModel` action covers `bedrock.converse()` explicitly:**
-  The plan states the existing `BedrockInvokeModel` statement "already covers the Haiku model via wildcard foundation-model and inference-profile ARNs — no change needed there." This is correct and confirmed by the actual `iam.tf`. However, since the `bedrock.converse()` SDK method may map to either `bedrock:InvokeModel` or a separate `bedrock:Converse` action depending on the API version, the plan should cite the existing working evidence: `_run_bedrock()` already calls `bedrock.converse()` successfully under the same IAM statement. This transforms an implicit assumption into a verified fact.
+- **Improvement 4 — Address the unmatched vendor scenario in Step 9:** Add a note explaining that `<input type="text">` + `<datalist>` does not enforce that the value must appear in the list (unlike `<select>`). The vendor field already contains `job.vendor` set at line 527 before the async fetch begins, so an OCR-scanned vendor absent from the datalist is retained and can be saved unchanged. No special unmatched-vendor handling is required.
 
-- **Improvement 5 — Testing strategy item 3 is mis-worded (cannot "rename" a DynamoDB table):**
-  The Testing Strategy item 3 says "Temporarily set `STORES_TABLE=\"\"` in a test invocation." This is correct. However, the prior review's version of this step mentioned "rename or empty the table" — if that wording survived into any test documentation, it should be corrected, since DynamoDB tables cannot be renamed. The plan as written only says to set the env var to empty, which is the right approach.
+- **Improvement 5 — Add a negative-path test to the Testing Strategy:** Add a test case: invoke the `api_handler` Lambda with `STORES_TABLE` set to an empty string (simulating a partial deploy where only the handler code was updated but the Terraform env var was not yet applied). Confirm the response is HTTP 200 with `{"stores": []}` and no exception is raised.
 
 ---
 
 ## Revised Steps (if applicable)
 
-**Revised Step 1 — Tool spec type declaration (replace the ambiguous guidance):**
+**Revised Step 3, item 7 — Corrected `Access-Control-Allow-Methods` instruction:**
 
-In `MATCH_STORE_TOOL`, declare `matched_name` as:
-```python
-"matched_name": {
-    "type": "string",
-    "description": (
-        "The exact string from the candidates list that best matches the OCR vendor. "
-        "Return the literal string 'null' if no store in the list is a confident match."
-    ),
-}
-```
-This is consistent with all other tool properties in `bedrock_extraction.py` and avoids the unvalidated array-type syntax. In the response parser, map `"null"` (case-insensitive) and empty string both to Python `None`:
-```python
-raw = (block["toolUse"]["input"].get("matched_name") or "").strip()
-return None if raw.lower() in ("null", "") else raw
-```
-Do not use `"type": ["string", "null"]` from the researcher's example — the established codebase convention is scalar-only type declarations.
+Replace the current item 7 with:
 
-**Revised Step 3 — Cache function, empty-table guard (add one sentence):**
+> `aws_api_gateway_integration_response.stores_options` — `response_parameters` must set:
+> - `method.response.header.Access-Control-Allow-Origin = "'*'"`
+> - `method.response.header.Access-Control-Allow-Methods = "'GET,OPTIONS'"` — this is the correct minimal value for a GET-only route. Note that existing routes in the file over-declare methods (e.g. `/receipts` OPTIONS states `'GET,POST,OPTIONS'` even though `/receipts` has no POST method defined). Do not copy that pattern here; use only the methods this resource actually exposes.
+> - `method.response.header.Access-Control-Allow-Headers = "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"` — this exact value must match every other OPTIONS integration_response in the file (lines 84, 156, 222, 305). Do not use the narrower `'Content-Type,Authorization'` value shown in the researcher's reference sample.
 
-```python
-_STORES_CACHE: list[str] | None = None
+**Revised Step 6 — Corrected processor model reference:**
 
-def _get_store_names() -> list[str]:
-    global _STORES_CACHE
-    if _STORES_CACHE is not None:
-        return _STORES_CACHE
-    # Do NOT assign _STORES_CACHE here — leave sentinel as None so that
-    # a redeployment adding STORES_TABLE triggers a fresh scan on next cold start.
-    if not STORES_TABLE:
-        return []
-    names = []
-    kwargs = {
-        "TableName": STORES_TABLE,
-        "ProjectionExpression": "#n",
-        "ExpressionAttributeNames": {"#n": "name"},
-    }
-    while True:
-        resp = dynamodb.scan(**kwargs)
-        for item in resp.get("Items", []):
-            n = item.get("name", {}).get("S", "").strip()
-            if n:
-                names.append(n)
-        if "LastEvaluatedKey" not in resp:
-            break
-        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
-    _STORES_CACHE = names
-    return _STORES_CACHE
-```
+Replace:
+> "Model the scan loop on the processor's `_get_store_names()` (processor/handler.py lines 74–96), but with one critical addition: after collecting all names from the paginated scan, apply `sorted(set(...))` before assigning to `_STORES_CACHE`. The processor's version stores a raw unsorted list without deduplication; copying it verbatim would produce unsorted, potentially duplicated names in the API response."
 
-**Revised Step 6 — Exact insertion point in `update_job(...)` dict:**
+With:
+> "Copy the scan mechanics from the processor's `_get_store_names()` (processor/handler.py lines 74–96): the `TableName`, `ProjectionExpression = "#n"`, `ExpressionAttributeNames = {"#n": "name"}`, `ExclusiveStartKey` pagination loop, and per-item extraction of `item.get("name", {}).get("S", "").strip()` with empty-string filtering. Do NOT copy the cache-assignment line `_STORES_CACHE = names` from the processor — that stores a raw, unsorted, non-deduplicated list. The API handler must instead assign `_STORES_CACHE = sorted(set(names))` after the loop completes, which simultaneously deduplicates and sorts the names before caching."
 
-Insert the new conditional spread directly after the `cropped_s3_key` line and before `"image_hash"`:
-```python
-        **( {"cropped_s3_key": dyn_s(result.cropped_s3_key)} if result.cropped_s3_key else {} ),
-        **( {"matched_store": dyn_s(result.matched_store)} if result.matched_store else {} ),
-        "image_hash": dyn_s(image_hash),
-```
+**Revised Step 9 — Warning against researcher's `innerHTML` sample and unmatched vendor note:**
+
+After the existing code block showing DOM element creation, add:
+
+> "IMPORTANT: The researcher's reference document (claude-context-researcher.md, section 2) shows a `dl.innerHTML = names.map(...)` pattern using template-literal interpolation. Do not use that pattern — OSM store names are written to DynamoDB unencoded and may contain `<`, `>`, `"`, and `&`. The DOM-method implementation above (`document.createElement / opt.value = n`) is the required approach.
+>
+> Regarding vendors absent from the datalist: `<input type='text'>` with a `<datalist>` does not enforce that the entered value must appear in the list (unlike `<select>`). The `modal.querySelector('#edit-vendor').value = job.vendor || ''` assignment at line 527 runs synchronously before this fetch begins, so an OCR-extracted vendor that does not appear in the datalist options will still be present in the field and can be saved unchanged. No special handling for unmatched vendors is needed."
 
 ---
 
 ## Summary
 
-The plan is structurally sound: all file paths, resource names, dataclass shapes, line references, and sequencing are confirmed accurate against the actual source code. The one material flaw is an unresolved direct contradiction between the plan's tool schema guidance (scalar `"type": "string"`) and the researcher's example schema (`"type": ["string", "null"]`); this must be explicitly resolved in favour of the scalar approach (consistent with the existing `RECEIPT_TOOL` in the codebase) before implementation begins. The two remaining gaps — the empty-table cache-assignment behaviour and the update_job insertion-point ambiguity — are low-risk but should be tightened to prevent implementer uncertainty.
+The plan's file-level assumptions, Terraform resource counts, IAM references, Lambda routing logic, and overall sequencing are all verified against the actual source code and are correct. Three issues must be fixed before implementation: (1) the self-contradictory `Access-Control-Allow-Methods` instruction must be resolved in favour of `'GET,OPTIONS'` with an explicit acknowledgement that existing routes over-declare methods; (2) the processor function reference must distinguish which parts to copy from which parts must not be copied; and (3) the implementer must be warned that the researcher's `innerHTML` datalist sample is the unsafe pattern that the plan itself prohibits. Two lower-priority gaps — the unmatched vendor explanation and the missing negative-path test — should also be addressed before implementation.

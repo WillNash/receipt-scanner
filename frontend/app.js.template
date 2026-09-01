@@ -504,7 +504,8 @@ async function showEditModal(job) {
     </div>
     <div style="margin-bottom:0.75rem">
       <label style="display:block;font-size:0.8rem;margin-bottom:2px">Store / Vendor</label>
-      <input id="edit-vendor" type="text" style="width:100%;padding:0.4rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
+      <input id="edit-vendor" type="text" list="store-options" autocomplete="off" placeholder="Type to search…" style="width:100%;padding:0.4rem;border:1px solid #ccc;border-radius:4px;box-sizing:border-box">
+      <datalist id="store-options"></datalist>
     </div>
     <div style="margin-bottom:0.75rem">
       <label style="display:block;font-size:0.8rem;margin-bottom:2px">Receipt date (YYYY-MM-DD)</label>
@@ -526,6 +527,21 @@ async function showEditModal(job) {
   // Set values via DOM (avoids XSS from user-controlled data in innerHTML)
   modal.querySelector("#edit-vendor").value = job.vendor || "";
   modal.querySelector("#edit-date").value = job.receiptDate || "";
+
+  // Populate store datalist async — non-blocking, degrades gracefully to free-text if it fails
+  apiFetch(`${CONFIG.apiBaseUrl}/stores`)
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (!data || !Array.isArray(data.stores)) return;
+      const dl = modal.querySelector("#store-options");
+      if (!dl) return;
+      data.stores.forEach(name => {
+        const opt = document.createElement("option");
+        opt.value = name;
+        dl.appendChild(opt);
+      });
+    })
+    .catch(() => {});
 
   overlay.appendChild(modal);
   document.body.appendChild(overlay);

@@ -19,6 +19,7 @@ from pricing import check_price_sum
 DYNAMODB_TABLE = os.environ["DYNAMODB_TABLE"]
 LINE_ITEMS_TABLE = os.environ.get("LINE_ITEMS_TABLE", "")
 IMAGE_HASHES_TABLE = os.environ.get("IMAGE_HASHES_TABLE", "")
+STORES_TABLE = os.environ.get("STORES_TABLE", "")
 UPLOADS_BUCKET = os.environ["UPLOADS_BUCKET"]
 COGNITO_POOL_ID = os.environ["COGNITO_USER_POOL_ID"]
 COGNITO_APP_CLIENT_ID = os.environ["COGNITO_APP_CLIENT_ID"]
@@ -145,11 +146,42 @@ class _JwksCache:
 # is picked up without requiring a cold start.
 _jwks_cache = _JwksCache()
 
+# Module-level stores cache — populated on first call, held for the lifetime of
+# the execution environment. Stores are refreshed weekly by a separate Lambda.
+_STORES_CACHE: list[str] | None = None
+
+
+def _get_store_names() -> list[str]:
+    global _STORES_CACHE
+    if _STORES_CACHE is not None:
+        return _STORES_CACHE
+    if not STORES_TABLE:
+        return []
+    names = []
+    kwargs: dict = {
+        "TableName": STORES_TABLE,
+        "ProjectionExpression": "#n",
+        "ExpressionAttributeNames": {"#n": "name"},
+    }
+    while True:
+        resp = dynamodb.scan(**kwargs)
+        for item in resp.get("Items", []):
+            n = item.get("name", {}).get("S", "").strip()
+            if n:
+                names.append(n)
+        if "LastEvaluatedKey" not in resp:
+            break
+        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+    _STORES_CACHE = sorted(set(names))
+    return _STORES_CACHE
+
 
 def _route(method: str, path: str, user_id: str, user_email: str, event: dict):
     job_id = (event.get("pathParameters") or {}).get("jobId")
     body = json.loads(event.get("body") or "{}") if method in ("POST", "PATCH") else {}
 
+    if method == "GET" and path.endswith("/stores"):
+        return handle_list_stores()
     if method == "POST" and path.endswith("/upload-url"):
         return handle_upload_url(event, user_id, user_email)
     if method == "GET" and path.endswith("/receipts"):
@@ -271,6 +303,10 @@ def handle_upload_url(event, user_id: str, user_email: str):
         ExpiresIn=PRESIGNED_PUT_TTL_SECONDS,
     )
     return make_response(200, {"jobId": job_id, "uploadUrl": upload_url, "s3Key": s3_key})
+
+
+def handle_list_stores():
+    return make_response(200, {"stores": _get_store_names()})
 
 
 def handle_list_receipts(user_id: str, cursor: str | None = None):

@@ -221,6 +221,12 @@ resource "aws_iam_role_policy" "lambda_api" {
         Resource = "${aws_s3_bucket.uploads.arn}/uploads/*"
       },
       {
+        Sid    = "StoresRead"
+        Effect = "Allow"
+        Action = ["dynamodb:Scan"]
+        Resource = aws_dynamodb_table.stores.arn
+      },
+      {
         # GetObject is required to generate presigned GET URLs for original, debug, and cropped image downloads
         Sid    = "S3ImageRead"
         Effect = "Allow"
