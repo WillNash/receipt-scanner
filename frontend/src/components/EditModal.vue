@@ -42,6 +42,26 @@ const priceSumText = computed(() => {
   return base + `  — ${priceDiff.value > 0 ? 'over' : 'under'} by $${Math.abs(priceDiff.value).toFixed(2)}`
 })
 
+const ITEM_CATEGORIES = [
+  { value: 'fruit_veg',     label: 'Fruit & Veg' },
+  { value: 'dairy',         label: 'Dairy' },
+  { value: 'meat_seafood',  label: 'Meat & Seafood' },
+  { value: 'bakery',        label: 'Bakery' },
+  { value: 'deli',          label: 'Deli' },
+  { value: 'frozen',        label: 'Frozen' },
+  { value: 'pantry',        label: 'Pantry' },
+  { value: 'snacks',        label: 'Snacks' },
+  { value: 'confectionery', label: 'Confectionery' },
+  { value: 'beverages',     label: 'Beverages' },
+  { value: 'alcohol',       label: 'Alcohol' },
+  { value: 'household',     label: 'Household' },
+  { value: 'personal_care', label: 'Personal Care' },
+  { value: 'pet',           label: 'Pet' },
+  { value: 'tobacco',       label: 'Tobacco' },
+  { value: 'non_food',      label: 'Non-food' },
+  { value: 'other',         label: 'Other' },
+]
+
 function addItem() {
   editItems.value.push({
     description: '',
@@ -50,6 +70,7 @@ function addItem() {
     unit_price: '',
     price: '',
     discount: '',
+    item_category: '',
   })
 }
 
@@ -149,6 +170,14 @@ async function save() {
               <input v-model="it.unit_price"   type="text" placeholder="Unit price" class="item-input item-input--num" style="width:22%" />
               <input v-model="it.price"        type="text" placeholder="Price"      class="item-input item-input--num" style="width:22%" />
               <input v-model="it.discount"     type="text" placeholder="Discount"   class="item-input item-input--num" style="width:22%" />
+            </div>
+
+            <!-- Row 3: category -->
+            <div class="item-cat-row">
+              <select v-model="it.item_category" class="item-input item-cat-select">
+                <option value="">— category —</option>
+                <option v-for="cat in ITEM_CATEGORIES" :key="cat.value" :value="cat.value">{{ cat.label }}</option>
+              </select>
             </div>
           </div>
         </div>
@@ -303,6 +332,16 @@ async function save() {
 .item-num-row {
   display: flex;
   gap: 0.3rem;
+}
+
+.item-cat-row {
+  margin-top: 3px;
+}
+
+.item-cat-select {
+  width: 100%;
+  background: var(--surface, #fff);
+  cursor: pointer;
 }
 
 .price-sum-bar {
