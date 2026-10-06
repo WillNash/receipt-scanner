@@ -23,7 +23,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       await ref.read(authProvider.notifier).signIn();
     } on Exception catch (e) {
       if (!mounted) return;
-      setState(() => _error = e.toString());
+      final msg = e.toString();
+      setState(() => _error = msg.contains('cancelled')
+          ? 'Sign-in was cancelled. Please try again.'
+          : 'Sign-in failed. Please check your connection and try again.');
     } finally {
       if (mounted) setState(() => _signingIn = false);
     }
