@@ -1,16 +1,49 @@
-# receipt_scanner
+# Receipt Scanner — Mobile
 
-A new Flutter project.
+Flutter app for scanning and uploading receipts to AWS.
 
-## Getting Started
+## Installing on Android over Wi-Fi (ADB)
 
-This project is a starting point for a Flutter application.
+Requires Android 11+ and both your phone and computer on the same Wi-Fi network.
 
-A few resources to get you started if this is your first Flutter project:
+### First-time pairing (do this once per computer)
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+1. Enable **Developer Options**: Settings → About phone → tap Build number 7 times
+2. Enable **Wireless debugging**: Settings → Developer options → Wireless debugging → toggle on
+3. Tap **Pair device with pairing code** — note the IP address, port, and 6-digit code shown
+4. On your computer:
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```bash
+adb pair <ip>:<port>
+# Enter the 6-digit code when prompted
+# e.g. adb pair 192.168.1.42:37491
+```
+
+### Connecting (each session)
+
+After pairing, use the main IP/port shown on the Wireless debugging screen (different from the pairing port):
+
+```bash
+adb connect <ip>:<port>
+# e.g. adb connect 192.168.1.42:5555
+
+adb devices  # confirm it shows up
+```
+
+The IP and port can change between sessions — check the Wireless debugging screen each time.
+
+### Building and installing the app
+
+```bash
+# Debug build with hot reload
+flutter run
+
+# Release build
+flutter build apk && adb install build/app/outputs/flutter-apk/app-release.apk
+```
+
+### Disconnecting
+
+```bash
+adb disconnect
+```
