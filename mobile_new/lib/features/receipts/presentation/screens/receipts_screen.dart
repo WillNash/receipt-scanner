@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../features/auth/presentation/view_models/auth_view_model.dart';
 import '../../data/models/receipt.dart';
 import '../sheets/edit_receipt_sheet.dart';
 import '../view_models/receipts_view_model.dart';
@@ -8,6 +9,28 @@ import '../widgets/receipt_card.dart';
 
 class ReceiptsScreen extends ConsumerWidget {
   const ReceiptsScreen({super.key});
+
+  Future<void> _confirmSignOut(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sign out?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sign out'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await ref.read(authProvider.notifier).signOut();
+    }
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -20,6 +43,11 @@ class ReceiptsScreen extends ConsumerWidget {
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () => ref.read(receiptsProvider.notifier).refresh(),
+          ),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Sign out',
+            onPressed: () => _confirmSignOut(context, ref),
           ),
         ],
       ),
