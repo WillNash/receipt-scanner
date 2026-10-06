@@ -287,3 +287,77 @@ def _compute_net_prices(items: list) -> None:
             continue
         discount = to_float(item.get("discount")) or 0.0
         item["price"] = str(round(line_total + discount, 2))
+
+
+MATCH_STORE_TOOL = {
+    "toolSpec": {
+        "name": "match_store",
+        "description": (
+            "Return the best-matching store name from the candidates list, "
+            "or the literal string 'null' if there is no confident match."
+        ),
+        "inputSchema": {
+            "json": {
+                "type": "object",
+                "properties": {
+                    "matched_name": {
+                        "type": "string",
+                        "description": (
+                            "Exact string from the candidates list, "
+                            "or the literal string 'null' if no match."
+                        ),
+                    }
+                },
+                "required": ["matched_name"],
+            }
+        },
+    }
+}
+
+_MATCH_SYSTEM = (
+    "You are a store name matcher. Given a raw OCR string from a receipt and a list of "
+    "known store names, identify the best match.\n\n"
+    "Rules:\n"
+    "- Ignore store branch numbers (e.g. '#47'), abbreviations, punctuation differences, and spacing.\n"
+    "- Match on the core brand name (e.g. 'PAK N SAVE' matches \"Pak'nSave\").\n"
+    "- If no store in the list is a plausible match, set matched_name to the literal string 'null'.\n"
+    "- Return only the tool call. No explanation."
+)
+
+
+def _match_store(vendor: str, store_names: list[str]) -> str | None:
+    if not vendor or not store_names:
+        return None
+
+    candidates_block = "\n".join(f"- {n}" for n in store_names)
+    user_msg = (
+        f'OCR string: "{vendor}"\n\n'
+        f"Known store names:\n{candidates_block}\n\n"
+        "Return the tool call."
+    )
+
+    response = bedrock.converse(
+        modelId=BEDROCK_MODEL_ID,
+        system=[{"text": _MATCH_SYSTEM}],
+        messages=[{"role": "user", "content": [{"text": user_msg}]}],
+        toolConfig={
+            "tools": [MATCH_STORE_TOOL],
+            "toolChoice": {"tool": {"name": "match_store"}},
+        },
+    )
+
+    matched_name = None
+    for block in response.get("output", {}).get("message", {}).get("content", []):
+        if block.get("toolUse", {}).get("name") == "match_store":
+            raw = block["toolUse"]["input"].get("matched_name")
+            if raw and raw != "null":
+                matched_name = raw
+            break
+
+    usage = response.get("usage", {})
+    print(
+        f"BEDROCK_USAGE model={BEDROCK_MODEL_ID} "
+        f"input={usage.get('inputTokens')} output={usage.get('outputTokens')} "
+        f"task=store_match"
+    )
+    return matched_name

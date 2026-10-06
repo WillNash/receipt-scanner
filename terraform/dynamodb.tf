@@ -66,6 +66,27 @@ resource "aws_dynamodb_table" "line_items" {
   }
 }
 
+resource "aws_dynamodb_table" "stores" {
+  name         = "${var.project_name}-stores"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "store_id"
+
+  attribute {
+    name = "store_id"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
+  tags = {
+    Project     = var.project_name
+    Environment = var.environment
+  }
+}
+
 resource "aws_dynamodb_table" "jobs" {
   name         = "${var.project_name}-jobs"
   billing_mode = "PAY_PER_REQUEST"

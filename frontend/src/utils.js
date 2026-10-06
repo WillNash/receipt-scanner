@@ -1,3 +1,7 @@
+export function parseCurrency(str) {
+  return parseFloat((str || '0').replace(/[^0-9.-]/g, '')) || 0
+}
+
 export function formatDate(dateStr) {
   if (!dateStr) return ''
   const d = new Date(dateStr)

@@ -40,4 +40,12 @@ cp "$API_DIR/handler.py" "$LAMBDA_DIR/shared/pricing.py" "$LAMBDA_DIR/shared/dyn
   --quiet --no-cache-dir
 echo "API package ready: $PKG_DIR"
 
+echo "=== Packaging stores_refresh Lambda ==="
+STORES_DIR="$LAMBDA_DIR/stores_refresh"
+PKG_DIR="$STORES_DIR/package"
+rm -rf "$PKG_DIR"
+mkdir -p "$PKG_DIR"
+cp "$STORES_DIR/handler.py" "$PKG_DIR/"
+echo "stores_refresh package ready: $PKG_DIR"
+
 echo "=== Lambda packaging complete ==="
