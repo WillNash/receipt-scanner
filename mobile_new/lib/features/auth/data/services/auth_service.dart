@@ -21,6 +21,7 @@ class AuthService {
         AppConfig.redirectUri,
         serviceConfiguration: _serviceConfig,
         scopes: AppConfig.scopes,
+        additionalParameters: {'prompt': 'login'},
       ),
     );
     if (result == null) throw Exception('Sign-in cancelled');
