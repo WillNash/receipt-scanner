@@ -1,80 +1,63 @@
-import 'package:flutter_appauth/flutter_appauth.dart';
+import 'package:amazon_cognito_identity_dart_2/cognito.dart';
 
 import '../../../../core/config/app_config.dart';
 import '../models/auth_tokens.dart';
 
 class AuthService {
-  AuthService() : _appAuth = const FlutterAppAuth();
+  AuthService()
+      : _pool = CognitoUserPool(
+          AppConfig.cognitoUserPoolId,
+          AppConfig.cognitoClientId,
+        );
 
-  final FlutterAppAuth _appAuth;
+  final CognitoUserPool _pool;
+  CognitoUser? _user;
 
-  static final _serviceConfig = AuthorizationServiceConfiguration(
-    authorizationEndpoint: AppConfig.cognitoAuthEndpoint,
-    tokenEndpoint: AppConfig.cognitoTokenEndpoint,
-    endSessionEndpoint: AppConfig.cognitoEndSessionEndpoint,
-  );
-
-  Future<AuthTokens> signIn() async {
-    final result = await _appAuth.authorizeAndExchangeCode(
-      AuthorizationTokenRequest(
-        AppConfig.cognitoClientId,
-        AppConfig.redirectUri,
-        serviceConfiguration: _serviceConfig,
-        scopes: AppConfig.scopes,
-        promptValues: ['login'],
-      ),
+  Future<AuthTokens> signIn(String email, String password) async {
+    final user = CognitoUser(email, _pool);
+    final session = await user.authenticateUser(
+      AuthenticationDetails(username: email, password: password),
     );
-    if (result == null) throw Exception('Sign-in cancelled');
-    return _tokensFromAuthorization(result);
+    if (session == null) throw Exception('Sign-in failed');
+    _user = user;
+    return _tokensFromSession(session);
   }
 
-  Future<AuthTokens?> refresh(AuthTokens current) async {
-    final refreshToken = current.refreshToken;
-    if (refreshToken == null) return null;
-
+  Future<AuthTokens?> refresh(AuthTokens current, String? username) async {
+    if (current.refreshToken == null) return null;
     try {
-      final result = await _appAuth.token(
-        TokenRequest(
-          AppConfig.cognitoClientId,
-          AppConfig.redirectUri,
-          refreshToken: refreshToken,
-          grantType: 'refresh_token',
-          serviceConfiguration: _serviceConfig,
-          scopes: AppConfig.scopes,
-        ),
+      final user = _user ?? CognitoUser(username ?? '', _pool);
+      final session = await user.refreshSession(
+        CognitoRefreshToken(current.refreshToken!),
       );
-      if (result == null) return null;
+      if (session == null) return null;
+      _user = user;
       return AuthTokens(
-        idToken: result.idToken ?? current.idToken,
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken ?? refreshToken,
-        expiry: result.accessTokenExpirationDateTime,
+        idToken: session.idToken.jwtToken ?? current.idToken,
+        accessToken: session.accessToken.jwtToken,
+        refreshToken: session.refreshToken?.token ?? current.refreshToken,
+        expiry: DateTime.fromMillisecondsSinceEpoch(
+          session.accessToken.getExpiration() * 1000,
+        ),
       );
     } catch (_) {
       return null;
     }
   }
 
-  Future<void> endSession(AuthTokens tokens) async {
-    try {
-      await _appAuth.endSession(
-        EndSessionRequest(
-          idTokenHint: tokens.idToken,
-          postLogoutRedirectUrl: AppConfig.postLogoutRedirectUri,
-          serviceConfiguration: _serviceConfig,
-        ),
-      );
-    } catch (_) {
-      // Best-effort — local tokens are cleared regardless
-    }
+  Future<void> signOut() async {
+    await _user?.signOut();
+    _user = null;
   }
 
-  AuthTokens _tokensFromAuthorization(AuthorizationTokenResponse result) {
+  AuthTokens _tokensFromSession(CognitoUserSession session) {
     return AuthTokens(
-      idToken: result.idToken ?? '',
-      accessToken: result.accessToken,
-      refreshToken: result.refreshToken,
-      expiry: result.accessTokenExpirationDateTime,
+      idToken: session.idToken.jwtToken ?? '',
+      accessToken: session.accessToken.jwtToken,
+      refreshToken: session.refreshToken?.token,
+      expiry: DateTime.fromMillisecondsSinceEpoch(
+        session.accessToken.getExpiration() * 1000,
+      ),
     );
   }
 }

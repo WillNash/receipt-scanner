@@ -30,25 +30,6 @@
             </intent-filter>
         </activity>
 
-        <!-- singleTask ensures RedirectUriReceiverActivity finds this instance
-             across task boundaries instead of creating a stateless duplicate -->
-        <activity
-            android:name="net.openid.appauth.AuthorizationManagementActivity"
-            android:exported="false"
-            android:launchMode="singleTask"/>
-
-        <!-- Handles the OAuth2 redirect from the browser back to the app -->
-        <activity
-            android:name="net.openid.appauth.RedirectUriReceiverActivity"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-                <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="com.willnash.receiptscanner"/>
-            </intent-filter>
-        </activity>
-
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>

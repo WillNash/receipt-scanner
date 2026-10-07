@@ -16,8 +16,8 @@ class AuthRepository {
   static const _keyRefreshToken = 'refresh_token';
   static const _keyExpiry = 'expiry';
 
-  Future<AuthTokens> signIn() async {
-    final tokens = await _service.signIn();
+  Future<AuthTokens> signIn(String email, String password) async {
+    final tokens = await _service.signIn(email, password);
     await _store(tokens);
     return tokens;
   }
@@ -39,7 +39,7 @@ class AuthRepository {
     );
 
     if (tokens.isExpired) {
-      final refreshed = await _service.refresh(tokens);
+      final refreshed = await _service.refresh(tokens, extractEmail(idToken));
       if (refreshed != null) {
         await _store(refreshed);
         return refreshed;
@@ -53,13 +53,16 @@ class AuthRepository {
 
   Future<AuthTokens?> refreshIfNeeded(AuthTokens current) async {
     if (!current.isExpired) return current;
-    final refreshed = await _service.refresh(current);
+    final refreshed = await _service.refresh(
+      current,
+      extractEmail(current.idToken),
+    );
     if (refreshed != null) await _store(refreshed);
     return refreshed;
   }
 
   Future<void> signOut(AuthTokens? tokens) async {
-    if (tokens != null) await _service.endSession(tokens);
+    await _service.signOut();
     await clearTokens();
   }
 
@@ -81,8 +84,6 @@ class AuthRepository {
     }
   }
 
-  // Decode the email claim from the id_token JWT payload (no signature verification needed here —
-  // the API Lambda validates the token on every request).
   static String? extractEmail(String idToken) {
     try {
       final parts = idToken.split('.');
