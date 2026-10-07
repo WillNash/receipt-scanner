@@ -24,6 +24,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     } on Exception catch (e) {
       if (!mounted) return;
       final msg = e.toString();
+      // ignore: avoid_print
+      print('AUTH ERROR: $msg');
       setState(() => _error = msg.contains('cancelled')
           ? 'Sign-in was cancelled. Please try again.'
           : 'Sign-in failed. Please check your connection and try again.');
