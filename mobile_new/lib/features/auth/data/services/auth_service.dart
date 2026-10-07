@@ -21,7 +21,7 @@ class AuthService {
         AppConfig.redirectUri,
         serviceConfiguration: _serviceConfig,
         scopes: AppConfig.scopes,
-        preferEphemeralSession: true,
+        promptValues: ['login'],
       ),
     );
     if (result == null) throw Exception('Sign-in cancelled');
