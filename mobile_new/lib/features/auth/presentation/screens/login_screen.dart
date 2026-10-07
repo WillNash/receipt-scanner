@@ -83,14 +83,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   textInputAction: TextInputAction.next,
                   autocorrect: false,
                   decoration: const InputDecoration(
-                    labelText: 'Email',
+                    labelText: 'Username',
                     border: OutlineInputBorder(),
                   ),
-                  validator: (v) {
-                    if (v == null || v.trim().isEmpty) return 'Enter your email';
-                    if (!v.contains('@')) return 'Enter a valid email';
-                    return null;
-                  },
+                  validator: (v) =>
+                      (v == null || v.trim().isEmpty) ? 'Enter your username' : null,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
